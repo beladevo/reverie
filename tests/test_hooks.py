@@ -52,6 +52,14 @@ class HooksTest(ReverieTestCase):
         leaked = memory("creds", body="token ghp_" + "a" * 36)
         self.assertIn("secret", self.write(notes / "creds.md", leaked)["permissionDecisionReason"])
 
+    def test_team_policy_at_custom_path_is_read_only(self):
+        (self.project / ".claude").mkdir()
+        (self.project / ".claude" / "reverie.json").write_text(json.dumps({"attach": [
+            {"store": "project.notes", "mode": "read_write"},
+            {"store": "team.policy", "path": "docs/team-policy"}]}))
+        denied = self.write(self.project / "docs" / "team-policy" / "x.md", memory("x"))
+        self.assertIn("read-only", denied["permissionDecisionReason"])
+
     def test_writes_outside_stores_are_ignored(self):
         self.assertIsNone(self.write(self.project / "src.md", "anything"))
 

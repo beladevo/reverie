@@ -171,7 +171,11 @@ class Store:
 
     def _append(self, entry: dict) -> dict:
         entry = {"seq": self.head_seq() + 1, "ts": now_iso(), **entry}
-        torn = self.log_path.exists() and self.log_path.stat().st_size and not self.log_path.read_bytes().endswith(b"\n")
+        torn = False
+        if self.log_path.exists() and self.log_path.stat().st_size:
+            with open(self.log_path, "rb") as f:
+                f.seek(-1, os.SEEK_END)
+                torn = f.read(1) != b"\n"
         with open(self.log_path, "a") as f:
             f.write(("\n" if torn else "") + json.dumps(entry, sort_keys=True) + "\n")
             f.flush()
@@ -188,10 +192,13 @@ class Store:
             self._append({"path": rel_path, "op": "delete", "hash": None, "parent": current,
                           "actor": {"kind": "external", "tool": "external-edit"}, "reason": None})
             return None
-        self.put_blob(target.read_bytes())
-        self._append({"path": rel_path, "op": "put", "hash": on_disk, "parent": current,
+        try:
+            digest = self.put_blob(target.read_bytes())
+        except FileNotFoundError:
+            return current
+        self._append({"path": rel_path, "op": "put", "hash": digest, "parent": current,
                       "actor": {"kind": "external", "tool": "external-edit"}, "reason": None})
-        return on_disk
+        return digest
 
     def write(self, rel_path: str, data: bytes, actor: Actor, if_match: Optional[str] = "*", reason: Optional[str] = None) -> dict:
         """Write through the store. if_match: "*" skips the check, None requires the file to be absent."""

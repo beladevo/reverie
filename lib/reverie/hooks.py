@@ -92,6 +92,8 @@ def _is_builtin_memory(path: Path) -> bool:
 
 def _may_be_memory(path: Path) -> bool:
     """Cheap pre-filter so ordinary file reads and writes don't pay for git calls and config loading."""
+    if path.suffix == ".md":
+        return True
     resolved = str(path.resolve())
     return any(resolved.startswith(str(root.resolve()) + os.sep) for root in (data_root(), claude_home())) \
         or f"{os.sep}.claude{os.sep}reverie{os.sep}" in resolved
@@ -173,9 +175,8 @@ def session_end(payload: dict) -> None:
     }
     with open(data_root() / "sessions.jsonl", "a") as f:
         f.write(json.dumps(record) + "\n")
-    for leftover in (state.path, state.path.with_suffix(".lock")):
-        if leftover.exists():
-            leftover.unlink()
+    if state.path.exists():
+        state.path.unlink()
 
 
 HANDLERS = {

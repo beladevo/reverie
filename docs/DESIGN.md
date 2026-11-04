@@ -429,12 +429,11 @@ Where the shipped code differs from the plan above, and why:
   doesn't know is versioned first (`actor.kind = external`) and an `if_match` against the old version fails.
 - **Failed dreams back off.** Every attempt records `last_attempt_at`; timeouts and a missing `claude` binary
   are recorded as failed dreams instead of crashing.
-- **Sessions consumed** are tracked per project in `dreams/state.json`; a failed dream consumes nothing.
+- **Sessions consumed** are tracked per project in `dreams/state.json`; a failed dream consumes nothing. When more than
+  `max_sessions` are waiting, only the newest are digested and the older ones are marked consumed.
 
 ### Known gaps
 
 - Read-only enforcement covers Claude's file tools, not shell commands. An agent that edits a policy file
   with `sed` through Bash is caught at the next session start and versioned as `external`, not blocked.
-- Hooks skip paths outside the Reverie data dir, `~/.claude`, and `*/.claude/reverie/*`, so a team policy
-  attached from a custom path elsewhere isn't write-guarded by the hook (git still tracks it).
 - No Windows support (POSIX `fcntl` locks); on Windows the hooks exit silently.

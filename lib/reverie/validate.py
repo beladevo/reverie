@@ -17,8 +17,8 @@ SECRET_PATTERNS = [
     ("Private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("JWT", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
     ("Credential assignment", re.compile(
-        r"(?i)[a-z0-9_.-]*(password|passwd|pwd|secret|api[_-]?key|access[_-]?key|token)[a-z0-9_.-]*"
-        r"['\"]?\s*[:=]\s*['\"]?[^\s'\"<>{}]{8,}")),
+        r"(?i)\b[a-z0-9_.-]*?(password|passwd|secret[_-]?(?:access[_-]?)?key|secret|api[_-]?key|access[_-]?key|auth[_-]?token|access[_-]?token|token)"
+        r"['\"]?\s*[:=]\s*['\"]?(?!process\.env|os\.environ|env\.|\$|\d+\b)[^\s'\"<>{}]{8,}")),
     ("Credentials in URL", re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@")),
 ]
 

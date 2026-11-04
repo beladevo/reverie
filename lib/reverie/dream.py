@@ -262,13 +262,19 @@ def _memory_name(store: Store, digest: Optional[str], rel: str) -> str:
 
 
 def _hold_promoted_notes(ops: list[dict], attachments: dict[str, Attachment]) -> None:
-    """A promotion deletes the note and creates the policy file; the delete must wait for the same review."""
-    held = {_memory_name(attachments[op["store"]].store, op["hash"], op["path"])
-            for op in ops if op["status"] in ("pending", "rejected") and attachments[op["store"]].kind == "policy"}
+    """A promotion deletes a note and creates a policy file; the delete must not outrun the policy review."""
+    policy_puts = [op for op in ops if op["op"] == "put" and attachments[op["store"]].kind == "policy"]
+    any_pending = any(op["status"] == "pending" for op in policy_puts)
+    rejected = {key for op in policy_puts if op["status"] == "rejected"
+                for key in (Path(op["path"]).stem, _memory_name(attachments[op["store"]].store, op["hash"], op["path"]))}
     for op in ops:
-        if op["op"] == "delete" and op["status"] == "accepted" and attachments[op["store"]].kind != "policy":
-            if _memory_name(attachments[op["store"]].store, op["base"], op["path"]) in held:
-                op["status"] = "pending"
+        if op["op"] != "delete" or op["status"] != "accepted" or attachments[op["store"]].kind == "policy":
+            continue
+        keys = {Path(op["path"]).stem, _memory_name(attachments[op["store"]].store, op["base"], op["path"])}
+        if keys & rejected:
+            op["status"], op["problems"] = "rejected", ["its promotion to policy was rejected"]
+        elif any_pending:
+            op["status"], op["problems"] = "pending", ["held until this dream's policy changes are reviewed"]
 
 
 def _store_of(op: dict) -> Store:

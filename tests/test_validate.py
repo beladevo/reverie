@@ -34,7 +34,10 @@ class ValidateTest(unittest.TestCase):
         for leaked in ("aws_secret_access_key = wJalrXUtnFEMI/K7MDENG", "SECRET_KEY=abcdefgh1234",
                        "DATABASE_PASSWORD=hunter2hunter2", "postgres://admin:pw@db.internal/app"):
             self.assertTrue(find_secrets(leaked), leaked)
-        self.assertEqual(find_secrets("max_tokens: 2000"), [])
+        for benign in ("max_tokens: 2000", "max_tokens = 100000000", "token: process.env.GITHUB_TOKEN",
+                       "tokenizer = AutoTokenizer.from_pretrained", "pwd=$(pwd)/build",
+                       "CSRF_TOKEN_HEADER: X-CSRF-Token-Value", "secret: ${{ secrets.DEPLOY_KEY }}"):
+            self.assertEqual(find_secrets(benign), [], benign)
 
     def test_caps_description_length(self):
         text = memory("a").replace("description: about a", "description: " + "x" * 300)

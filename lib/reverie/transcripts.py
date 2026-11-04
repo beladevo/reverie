@@ -56,6 +56,8 @@ def _render_entry(entry: dict) -> list[str]:
 def condense(transcript: Path, max_chars: int) -> str:
     """Reduce a session transcript to what a reviewer needs: what was asked, said, tried, and what failed."""
     lines: list[str] = []
+    if not transcript.is_file():
+        return ""
     try:
         with open(transcript, errors="replace") as f:
             for raw in f:

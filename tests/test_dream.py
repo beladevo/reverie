@@ -114,6 +114,25 @@ Path("changes.json").write_text(json.dumps({"changes": [
         self.assertIn("vi.mock is hoisted", self.cli("show", "project.policy", "testing/mocks-a.md").stdout)
         self.assertEqual(self.cli("show", "project.notes", "testing/mocks-a.md", check=False).returncode, 1)
 
+    def test_note_delete_is_rejected_with_its_rejected_promotion(self):
+        from reverie.dream import _hold_promoted_notes
+        from reverie.runtime import open_store
+        from reverie.store import Actor
+        from types import SimpleNamespace
+        notes = open_store("p-x.notes")
+        policy = open_store("p-x.policy")
+        base = notes.write("a.md", memory("mocks-a").encode(), Actor(kind="agent"))["hash"]
+        new = policy.put_blob(memory("renamed").encode())
+        atts = {"n": SimpleNamespace(store=notes, kind="notes"), "p": SimpleNamespace(store=policy, kind="policy")}
+        ops = [{"store": "p", "op": "put", "path": "mocks-a.md", "hash": new, "status": "rejected", "problems": []},
+               {"store": "n", "op": "delete", "path": "a.md", "base": base, "hash": None, "status": "accepted", "problems": []}]
+        _hold_promoted_notes(ops, atts)
+        self.assertEqual(ops[1]["status"], "rejected")
+        ops[0]["status"], ops[1]["status"] = "pending", "accepted"
+        ops[0]["path"] = "other.md"
+        _hold_promoted_notes(ops, atts)
+        self.assertEqual(ops[1]["status"], "pending")
+
     def test_policy_gate_ignores_fake_or_ambiguous_citations(self):
         from reverie.dream import _evidence
         known = {"abc12345-0000", "abc12345-1111", "def67890-2222"}
