@@ -249,7 +249,26 @@ def _diff_ops(dream_dir: Path, attachments: list[Attachment], sessions: set[str]
             op["evidence"] = sorted((change or {}).get("evidence") or [])
             op["rationale"] = (change or {}).get("rationale", "")
             ops.append(op)
+    _hold_promoted_notes(ops, {a.name: a for a in attachments})
     return ops, summary
+
+
+def _memory_name(store: Store, digest: Optional[str], rel: str) -> str:
+    if digest:
+        meta, _ = parse_frontmatter(store.get_blob(digest).decode(errors="replace"))
+        if isinstance(meta.get("name"), str):
+            return meta["name"]
+    return Path(rel).stem
+
+
+def _hold_promoted_notes(ops: list[dict], attachments: dict[str, Attachment]) -> None:
+    """A promotion deletes the note and creates the policy file; the delete must wait for the same review."""
+    held = {_memory_name(attachments[op["store"]].store, op["hash"], op["path"])
+            for op in ops if op["status"] in ("pending", "rejected") and attachments[op["store"]].kind == "policy"}
+    for op in ops:
+        if op["op"] == "delete" and op["status"] == "accepted" and attachments[op["store"]].kind != "policy":
+            if _memory_name(attachments[op["store"]].store, op["base"], op["path"]) in held:
+                op["status"] = "pending"
 
 
 def _store_of(op: dict) -> Store:

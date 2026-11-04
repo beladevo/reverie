@@ -87,6 +87,33 @@ class DreamTest(ReverieTestCase):
         time.sleep(1)
         self.assertEqual(len(list((self.data / "dreams").glob("*/result.json"))), 1, "not due again until interval passes")
 
+    def test_promotion_keeps_the_note_until_the_policy_is_reviewed(self):
+        promote = ROOT / "tests" / "fake_claude_promote.py"
+        promote.write_text("""#!/usr/bin/env python3
+import json
+from pathlib import Path
+sessions = sorted(p.stem for p in Path("digest").glob("*.md"))
+note = Path("proposal/project.notes/testing/mocks-a.md")
+text = note.read_text().replace("confidence: high", "confidence: high\\nevidence: [" + ", ".join(sessions) + "]")
+note.unlink()
+Path("proposal/project.policy/testing").mkdir(parents=True)
+Path("proposal/project.policy/testing/mocks-a.md").write_text(text)
+Path("changes.json").write_text(json.dumps({"changes": [
+    {"store": "project.notes", "path": "testing/mocks-a.md", "action": "delete", "rationale": "promoted", "evidence": sessions},
+    {"store": "project.policy", "path": "testing/mocks-a.md", "action": "create", "rationale": "promoted", "evidence": sessions}]}))
+""")
+        promote.chmod(0o755)
+        self.addCleanup(promote.unlink)
+        self.env["REVERIE_CLAUDE_BIN"] = str(promote)
+        record = self.dream("--mode", "auto")
+        ops = self.ops(record)
+        self.assertEqual(ops[("project.policy", "testing/mocks-a.md")]["status"], "pending")
+        self.assertEqual(ops[("project.notes", "testing/mocks-a.md")]["status"], "pending")
+        self.assertIn("vi.mock is hoisted", self.cli("show", "project.notes", "testing/mocks-a.md").stdout)
+        self.cli("accept", record["id"])
+        self.assertIn("vi.mock is hoisted", self.cli("show", "project.policy", "testing/mocks-a.md").stdout)
+        self.assertEqual(self.cli("show", "project.notes", "testing/mocks-a.md", check=False).returncode, 1)
+
     def test_policy_gate_ignores_fake_or_ambiguous_citations(self):
         from reverie.dream import _evidence
         known = {"abc12345-0000", "abc12345-1111", "def67890-2222"}
