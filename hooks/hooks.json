@@ -1,0 +1,17 @@
+{
+  "description": "Reverie: inject memory at session start, version and guard memory writes, log sessions for dreaming.",
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/reverie\" hook session-start", "timeout": 30 }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Write|Edit|MultiEdit", "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/reverie\" hook pre-write", "timeout": 10 }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Read|Write|Edit|MultiEdit", "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/reverie\" hook post-tool", "timeout": 10 }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/bin/reverie\" hook session-end" }] }
+    ]
+  }
+}

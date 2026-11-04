@@ -1,9 +1,9 @@
-# Reverie — Design (Phase 1)
+# Reverie — Design
 
 Persistent, versioned memory for Claude Code, plus an out-of-band "dreaming" job that
 turns raw session observations into clean, higher-signal knowledge.
 
-Status: **design, awaiting approval.** No implementation yet.
+Status: **implemented in v0.1.** §12 lists where the implementation differs from the original plan.
 
 ---
 
@@ -306,28 +306,27 @@ in place; applying produces new log entries, so "the store before this dream" is
 ```
 reverie/                                  # GitHub repo = plugin + its own marketplace
 ├── .claude-plugin/
-│   ├── plugin.json                       # name, version, description, author, license
-│   └── marketplace.json                  # lets users `/plugin marketplace add beladevo/reverie`
-├── hooks/
-│   └── hooks.json                        # SessionStart, PreToolUse, PostToolUse, PreCompact, SessionEnd
+│   ├── plugin.json
+│   └── marketplace.json                  # `/plugin install reverie --marketplace beladevo/reverie`
+├── hooks/hooks.json                      # SessionStart, PreToolUse, PostToolUse, SessionEnd
 ├── skills/
-│   └── memory/SKILL.md                   # when/what/how to write memory
-├── commands/
-│   ├── status.md  dream.md  review.md  log.md  rollback.md  export.md  store.md
-├── agents/
-│   └── dreamer.md                        # dreaming prompt (also used by headless run)
-├── bin/
-│   └── reverie                           # thin shim → python3 scripts/reverie.py
-├── scripts/
-│   ├── reverie.py                        # CLI entrypoint + hook dispatcher
-│   └── reverie/
-│       ├── store.py   versioning.py   occ.py   config.py   inject.py
-│       ├── transcripts.py   dream.py   validate.py   export.py   secrets.py
-├── tests/                                # unittest, stdlib only
+│   ├── memory/SKILL.md                   # model-invoked: when/what/how to write memory
+│   └── status|dream|review|history|export/SKILL.md   # user-invoked: /reverie:<name>
+├── bin/reverie                           # CLI; on the Bash PATH while the plugin is enabled
+├── lib/reverie/
+│   ├── store.py       versioned content-addressed store, OCC, rollback
+│   ├── config.py      defaults, config merge, project identity, data dir
+│   ├── runtime.py     attachments, per-session seen-hashes
+│   ├── validate.py    frontmatter, path rules, secret scanner
+│   ├── inject.py      SessionStart context builder
+│   ├── hooks.py       hook handlers (never fail the session)
+│   ├── transcripts.py transcript condenser
+│   ├── dream.py       dreaming pipeline, scheduling, review
+│   ├── cli.py
+│   └── prompts/dreamer.md
+├── tests/                                # unittest, stdlib only; fake `claude` for dream tests
 ├── docs/DESIGN.md
-├── README.md                             # install / enable / disable / uninstall
-├── LICENSE                               # MIT
-└── .github/workflows/ci.yml              # python 3.9–3.13, macOS + Linux
+└── .github/workflows/ci.yml
 ```
 
 Hook wiring (sketch):
@@ -337,7 +336,6 @@ Hook wiring (sketch):
   "SessionStart": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/reverie.py\" hook session-start"}]}],
   "PreToolUse":   [{"matcher": "Write|Edit|MultiEdit", "hooks": [{"type": "command", "command": "… hook pre-write"}]}],
   "PostToolUse":  [{"matcher": "Read|Write|Edit|MultiEdit", "hooks": [{"type": "command", "command": "… hook post-tool"}]}],
-  "PreCompact":   [{"hooks": [{"type": "command", "command": "… hook pre-compact"}]}],
   "SessionEnd":   [{"hooks": [{"type": "command", "command": "… hook session-end"}]}]
 }}
 ```
@@ -393,3 +391,32 @@ and threshold-scheduled dreaming with review/auto modes + export + rollback + te
 - Team sync: push/pull a `policy` store to a git remote.
 - Windows locking.
 - Multiple dreamer "passes" (dedupe → consolidate → promote) with separate prompts.
+
+---
+
+## 12. Implementation notes (v0.1)
+
+Where the shipped code differs from the plan above, and why:
+
+- **Skills instead of `commands/`.** Claude Code now prefers skills for new plugins; user-facing operations
+  are skills with `disable-model-invocation: true`, so they are still `/reverie:<name>`.
+- **No dreamer subagent file.** A plugin `agents/` entry would be offered to every session as a subagent.
+  The dreaming prompt lives in `lib/reverie/prompts/dreamer.md` and is used only by the headless run.
+- **No PreCompact hook.** The injected contract and the `memory` skill cover "write before you forget";
+  a compaction nudge can be added later.
+- **Dreamer output.** The dreamer edits a full copy of each store under `proposal/` and writes
+  `changes.json` (rationale + evidence per file). Operations are derived by diffing the proposal against
+  the dream's base snapshot, so the dreamer cannot claim a change it didn't make or make one it didn't
+  explain: a changed file without a `changes.json` entry is rejected.
+- **Default dream mode is `auto`** for notes; policy changes still wait for review (`auto_promote: false`).
+- **Built-in auto memory.** A plugin can't set `autoMemoryEnabled` (plugin `settings` only honours
+  `agent` and `subagentStatusLine`). Instead, while enabled, PreToolUse redirects writes aimed at
+  `~/.claude/projects/*/memory/` to the Reverie stores (`redirect_builtin_memory`). Verified live: before
+  this, sessions saved preferences to the built-in memory and Reverie never saw them.
+- **Data dir discovery.** Hooks get `CLAUDE_PLUGIN_DATA`; Bash-tool runs of `bin/reverie` don't, so the
+  CLI finds `~/.claude/plugins/data/reverie-*` by name. `REVERIE_DATA` overrides both.
+- **Child run isolation.** The dreamer runs `claude -p` in the dream directory with
+  `--permission-mode acceptEdits`, an allowlist of file tools, Bash/Web/Agent disallowed, and
+  `REVERIE_DISABLE=1` + `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` so it neither triggers Reverie hooks nor writes
+  built-in memory. `--bare` was not used because it requires an API key instead of the user's login.
+- **Sessions consumed** are tracked per project in `dreams/state.json`; a failed dream consumes nothing.

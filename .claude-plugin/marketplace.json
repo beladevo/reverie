@@ -1,0 +1,15 @@
+{
+  "name": "reverie",
+  "description": "Reverie: versioned memory and dreaming for Claude Code.",
+  "owner": {
+    "name": "Omri Beladev",
+    "url": "https://github.com/beladevo"
+  },
+  "plugins": [
+    {
+      "name": "reverie",
+      "source": "./",
+      "description": "Versioned Markdown memory across sessions, curated by a background dreaming job."
+    }
+  ]
+}
