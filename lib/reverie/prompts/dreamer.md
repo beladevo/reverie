@@ -18,8 +18,9 @@ The real stores are not reachable from here. Nothing you do is applied until it 
    - **Duplicates** — files that say the same thing. Merge into one file, delete the others, union their `evidence`.
    - **Stale or contradicted memory** — a newer session shows a memory is wrong or outdated. Fix or delete it.
    - **Low-value memory** — vague, unactionable, task-progress, or derivable from the code. Delete it.
-   - **Promotion** — a high-confidence note backed by several sessions that should become a rule.
-     Move it from the notes store into the policy store (create it under `proposal/<policy store>/`, delete the note).
+   - **Promotion** — a high-confidence note whose evidence meets the session threshold in `TASK.md`.
+     Propose it: create it under `proposal/<policy store>/` and delete the note. You are not applying it —
+     policy changes go to human review — so propose every promotion that meets the threshold.
 3. Edit `proposal/` to be the memory you would want to start the next session with.
 4. Write `changes.json` describing every file you created, changed or deleted.
 

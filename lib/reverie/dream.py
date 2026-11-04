@@ -19,8 +19,10 @@ from .transcripts import condense
 from .validate import parse_frontmatter, validate_memory
 
 PROMPT_FILE = Path(__file__).parent / "prompts" / "dreamer.md"
-DREAM_TOOLS = "Read,Write,Edit,Glob,Grep"
-BLOCKED_TOOLS = "Bash,WebFetch,WebSearch,Task,Agent,NotebookEdit"
+# dontAsk denies anything not allowed here. Read(./**) also scopes Glob and Grep; Edit(./**) covers Write.
+DREAM_ALLOWED = ["Read(./**)", "Edit(./**)"]
+DREAM_DISALLOWED = ["Bash", "WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit"]
+MIN_EVIDENCE_PREFIX = 8
 
 
 def dreams_dir() -> Path:
@@ -69,7 +71,8 @@ def is_due(project: Project, config: dict) -> bool:
     schedule = config["dream"]["schedule"]
     if not schedule.get("enabled"):
         return False
-    last = load_state()["projects"].get(project.id, {}).get("last_dream_at")
+    project_state = load_state()["projects"].get(project.id, {})
+    last = max(filter(None, [project_state.get("last_dream_at"), project_state.get("last_attempt_at")]), default=None)
     if last and datetime.now(timezone.utc) - _parse_ts(last) < timedelta(hours=schedule["interval_hours"]):
         return False
     return len(unconsumed_sessions(project)) >= schedule["min_sessions"]
@@ -138,13 +141,26 @@ def _run_dreamer(dream_dir: Path, config: dict) -> subprocess.CompletedProcess:
     cmd = [claude, "-p", prompt,
            "--model", config["dream"]["model"],
            "--max-turns", str(config["dream"]["max_turns"]),
-           "--permission-mode", "acceptEdits",
-           "--allowedTools", DREAM_TOOLS,
-           "--disallowedTools", BLOCKED_TOOLS,
+           "--permission-mode", "dontAsk",
+           "--allowedTools", *DREAM_ALLOWED,
+           "--disallowedTools", *DREAM_DISALLOWED,
+           "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+           "--setting-sources", "project",
            "--output-format", "json"]
     env = {**os.environ, "REVERIE_DISABLE": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
-    return subprocess.run(cmd, cwd=dream_dir, env=env, capture_output=True, text=True,
-                          timeout=config["dream"]["timeout_minutes"] * 60)
+    try:
+        return subprocess.run(cmd, cwd=dream_dir, env=env, capture_output=True, text=True,
+                              timeout=config["dream"]["timeout_minutes"] * 60, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired as e:
+        return subprocess.CompletedProcess(cmd, 124, _as_text(e.stdout), f"timed out after {config['dream']['timeout_minutes']}m")
+    except OSError as e:
+        return subprocess.CompletedProcess(cmd, 127, "", f"could not start {claude}: {e}")
+
+
+def _as_text(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value or ""
 
 
 def _rationale_index(dream_dir: Path) -> tuple[dict, str]:
@@ -164,12 +180,23 @@ def _rationale_index(dream_dir: Path) -> tuple[dict, str]:
 
 
 def _evidence(change: dict, content: Optional[str], known_sessions: set[str]) -> set[str]:
-    cited = set(change.get("evidence") or [])
+    """Distinct real sessions the change cites. A citation counts only if it names exactly one known session."""
+    cited = {str(e) for e in change.get("evidence") or []}
     if content:
         meta, _ = parse_frontmatter(content)
         if isinstance(meta.get("evidence"), list):
-            cited |= set(meta["evidence"])
-    return {e for e in cited if any(e == s or s.startswith(e) for s in known_sessions)}
+            cited |= {str(e) for e in meta["evidence"]}
+    matched = set()
+    for citation in cited:
+        if citation in known_sessions:
+            matched.add(citation)
+            continue
+        if len(citation) < MIN_EVIDENCE_PREFIX:
+            continue
+        candidates = [s for s in known_sessions if s.startswith(citation)]
+        if len(candidates) == 1:
+            matched.add(candidates[0])
+    return matched
 
 
 def _classify(op: dict, change: Optional[dict], att: Attachment, content: Optional[str],
@@ -197,6 +224,7 @@ def _historic_sessions() -> set[str]:
     for line in path.read_text().splitlines():
         with contextlib.suppress(json.JSONDecodeError):
             ids.add(json.loads(line).get("session_id") or "")
+    ids.discard("")
     return ids
 
 
@@ -215,7 +243,7 @@ def _diff_ops(dream_dir: Path, attachments: list[Attachment], sessions: set[str]
             op = {"id": len(ops) + 1, "store": att.name, "store_id": att.store.root.name, "path": rel,
                   "op": "put" if content is not None else "delete", "base": base_state.get(rel), "hash": new_hash}
             if content is not None:
-                att.store.put_blob(content.encode())
+                att.store.put_blob(proposed[rel].read_bytes())
             change = index.get((att.name, rel))
             op["status"], op["problems"] = _classify(op, change, att, content, sessions, config)
             op["evidence"] = sorted((change or {}).get("evidence") or [])
@@ -279,19 +307,22 @@ def run(cwd: Path, mode: Optional[str] = None, trigger: str = "manual") -> dict:
         config["dream"]["mode"] = mode
     attachments = [a for a in resolve_attachments(config, project) if a.store]
     with _project_lock(project):
-        sessions = unconsumed_sessions(project)[-config["dream"]["max_sessions"]:]
+        _mark_attempt(project)
+        waiting = unconsumed_sessions(project)
+        sessions = waiting[-config["dream"]["max_sessions"]:]
         dream_id = _new_dream_id()
         dream_dir = dreams_dir() / dream_id
         (dream_dir / "digest").mkdir(parents=True)
         for att in attachments:
             (dream_dir / "proposal" / att.name).mkdir(parents=True)
-            att.store.sync_external(Actor(kind="human", tool="external-edit"))
+            att.store.sync_external(Actor(kind="external", tool="external-edit"))
             att.store.materialize(dream_dir / "proposal" / att.name)
         for s in sessions:
             digest = condense(Path(s.get("transcript_path") or ""), config["dream"]["digest_chars_per_session"])
             (dream_dir / "digest" / f"{s['session_id']}.md").write_text(digest or "(transcript unavailable)")
         record = {"id": dream_id, "project": project.id, "trigger": trigger, "mode": config["dream"]["mode"],
                   "cwd": str(cwd), "started_at": now_iso(), "sessions": [s["session_id"] for s in sessions],
+                  "skipped_sessions": [s["session_id"] for s in waiting if s not in sessions],
                   "base": {a.name: {"store_id": a.store.root.name, "seq": a.store.head_seq()} for a in attachments}}
         atomic_write(dream_dir / "input.json", (json.dumps(record, indent=2) + "\n").encode())
         _write_task(dream_dir, attachments, sessions, config)
@@ -312,10 +343,16 @@ def run(cwd: Path, mode: Optional[str] = None, trigger: str = "manual") -> dict:
 
         state = load_state()
         project_state = state["projects"].setdefault(project.id, {"consumed": []})
-        project_state["consumed"] = sorted(set(project_state["consumed"]) | set(record["sessions"]))
+        project_state["consumed"] = sorted(set(project_state["consumed"]) | set(record["sessions"]) | set(record["skipped_sessions"]))
         project_state["last_dream_at"] = now_iso()
         _save_state(state)
         return record
+
+
+def _mark_attempt(project: Project) -> None:
+    state = load_state()
+    state["projects"].setdefault(project.id, {"consumed": []})["last_attempt_at"] = now_iso()
+    _save_state(state)
 
 
 def list_dreams(project: Optional[Project] = None) -> list[dict]:

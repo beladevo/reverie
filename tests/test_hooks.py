@@ -92,6 +92,17 @@ class HooksTest(ReverieTestCase):
         self.assertIn("Reverie is this session's memory system", denied["permissionDecisionReason"])
         self.assertIn(".notes/tree", denied["permissionDecisionReason"])
 
+    def test_parallel_reads_all_count_as_seen(self):
+        import concurrent.futures
+        notes = self.store_dir("notes")
+        paths = [notes / f"f{i}.md" for i in range(6)]
+        for p in paths:
+            self.write(p, memory(p.stem), session="writer")
+        with concurrent.futures.ThreadPoolExecutor(6) as pool:
+            list(pool.map(lambda p: self.read(p, session="reader"), paths))
+        for p in paths:
+            self.assertIsNone(self.write(p, memory(p.stem, "updated"), session="reader"), p)
+
     def test_disabled_env_makes_hooks_noop(self):
         self.env["REVERIE_DISABLE"] = "1"
         self.assertEqual(self.hook("session-start", source="startup"), {})

@@ -48,7 +48,7 @@ def _proposed_content(tool: str, tool_input: dict, path: Path) -> Optional[str]:
 
 def session_start(payload: dict) -> None:
     project, config, attachments = _context(payload)
-    actor = Actor(kind="human", session=payload.get("session_id"), tool="external-edit")
+    actor = Actor(kind="external", tool="external-edit")
     for attachment in attachments:
         if attachment.store:
             attachment.store.sync_external(actor)
@@ -90,10 +90,17 @@ def _is_builtin_memory(path: Path) -> bool:
     return parts[:len(projects)] == projects and "memory" in parts[len(projects):]
 
 
+def _may_be_memory(path: Path) -> bool:
+    """Cheap pre-filter so ordinary file reads and writes don't pay for git calls and config loading."""
+    resolved = str(path.resolve())
+    return any(resolved.startswith(str(root.resolve()) + os.sep) for root in (data_root(), claude_home())) \
+        or f"{os.sep}.claude{os.sep}reverie{os.sep}" in resolved
+
+
 def pre_write(payload: dict) -> None:
     tool_input = payload.get("tool_input") or {}
     raw_path = tool_input.get("file_path")
-    if not raw_path:
+    if not raw_path or not _may_be_memory(Path(raw_path)):
         return
     path = Path(raw_path)
     _, config, attachments = _context(payload)
@@ -126,25 +133,25 @@ def pre_write(payload: dict) -> None:
 def post_tool(payload: dict) -> None:
     tool = payload.get("tool_name", "")
     raw_path = (payload.get("tool_input") or {}).get("file_path")
-    if not raw_path:
+    if not raw_path or not _may_be_memory(Path(raw_path)):
         return
     path = Path(raw_path)
     _, _, attachments = _context(payload)
     attachment = attachment_for(path, attachments)
     if attachment is None:
         return
-    state = SessionState(payload.get("session_id", ""))
+    session_id = payload.get("session_id", "")
     if tool == "Read":
-        state.mark_seen(path, hash_file(path))
-        state.save()
+        with SessionState.locked(session_id) as state:
+            state.mark_seen(path, hash_file(path))
         return
     if tool not in WRITE_TOOLS or not attachment.writable:
         return
-    actor = Actor(kind="agent", session=payload.get("session_id"), tool=tool, cwd=payload.get("cwd"))
-    entry = attachment.store.record(attachment.store.rel(path), actor, parent_seen=state.seen(path))
-    state.mark_seen(path, hash_file(path))
-    state.touch(attachment.name)
-    state.save()
+    actor = Actor(kind="agent", session=session_id, tool=tool, cwd=payload.get("cwd"))
+    with SessionState.locked(session_id) as state:
+        entry = attachment.store.record(attachment.store.rel(path), actor, parent_seen=state.seen(path))
+        state.mark_seen(path, hash_file(path))
+        state.touch(attachment.name)
     if entry.get("conflict"):
         _emit("PostToolUse", additionalContext=(
             f"Reverie: {path} was changed by another writer while you edited it. Both versions are in history "
@@ -166,8 +173,9 @@ def session_end(payload: dict) -> None:
     }
     with open(data_root() / "sessions.jsonl", "a") as f:
         f.write(json.dumps(record) + "\n")
-    if state.path.exists():
-        state.path.unlink()
+    for leftover in (state.path, state.path.with_suffix(".lock")):
+        if leftover.exists():
+            leftover.unlink()
 
 
 HANDLERS = {

@@ -80,6 +80,24 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(sorted(e["path"] for e in entries), ["a.md", "b.md"])
         self.assertEqual(self.store.sync_external(Actor(kind="human")), [])
 
+    def test_writes_never_drop_an_unversioned_external_edit(self):
+        first = self.store.write("a.md", b"one", ACTOR)
+        (self.store.tree / "a.md").write_bytes(b"edited in vim")
+        with self.assertRaises(ConflictError):
+            self.store.write("a.md", b"dream", ACTOR, if_match=first["hash"])
+        self.assertEqual((self.store.tree / "a.md").read_bytes(), b"edited in vim")
+        self.store.write("a.md", b"forced", ACTOR)
+        blobs = [self.store.get_blob(e["hash"]) for e in self.store.history("a.md")]
+        self.assertEqual(blobs, [b"one", b"edited in vim", b"forced"])
+        self.assertEqual(self.store.history("a.md")[1]["actor"]["kind"], "external")
+
+    def test_torn_log_line_is_skipped_and_not_extended(self):
+        self.store.write("a.md", b"one", ACTOR)
+        with open(self.store.log_path, "a") as f:
+            f.write('{"seq": 2, "trunc')
+        self.store.write("b.md", b"two", ACTOR)
+        self.assertEqual(sorted(self.store.state()), ["a.md", "b.md"])
+
     def test_paths_cannot_escape_store(self):
         with self.assertRaises(ValueError):
             self.store.write("../evil.md", b"x", ACTOR)

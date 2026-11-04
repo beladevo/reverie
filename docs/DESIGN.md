@@ -419,4 +419,22 @@ Where the shipped code differs from the plan above, and why:
   `--permission-mode acceptEdits`, an allowlist of file tools, Bash/Web/Agent disallowed, and
   `REVERIE_DISABLE=1` + `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` so it neither triggers Reverie hooks nor writes
   built-in memory. `--bare` was not used because it requires an API key instead of the user's login.
+- **Dreamer sandbox** (verified live): `--permission-mode dontAsk` with only `Read(./**)` and `Edit(./**)`
+  allowed — `Read` rules also scope Glob/Grep and `Edit` rules cover Write — plus
+  `--setting-sources project` and `--strict-mcp-config` with no servers, so other plugins' hooks and MCP
+  servers don't load. Reading or writing outside the dream directory is denied.
+- **Policy evidence gate** counts distinct known sessions; a citation must name a session exactly or by an
+  unambiguous prefix of at least 8 characters.
+- **External edits are never lost.** Before any write through the store, an on-disk version that the log
+  doesn't know is versioned first (`actor.kind = external`) and an `if_match` against the old version fails.
+- **Failed dreams back off.** Every attempt records `last_attempt_at`; timeouts and a missing `claude` binary
+  are recorded as failed dreams instead of crashing.
 - **Sessions consumed** are tracked per project in `dreams/state.json`; a failed dream consumes nothing.
+
+### Known gaps
+
+- Read-only enforcement covers Claude's file tools, not shell commands. An agent that edits a policy file
+  with `sed` through Bash is caught at the next session start and versioned as `external`, not blocked.
+- Hooks skip paths outside the Reverie data dir, `~/.claude`, and `*/.claude/reverie/*`, so a team policy
+  attached from a custom path elsewhere isn't write-guarded by the hook (git still tracks it).
+- No Windows support (POSIX `fcntl` locks); on Windows the hooks exit silently.

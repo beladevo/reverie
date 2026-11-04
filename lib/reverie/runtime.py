@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from .config import STORE_DESCRIPTIONS, Project, data_root, resolve_store_id, store_kind_for
 from .store import Store, atomic_write
@@ -92,11 +94,28 @@ def _safe_session(session_id: str) -> str:
 
 
 class SessionState:
-    """Per-session bookkeeping: the hash of each memory file as this session last saw it."""
+    """Per-session bookkeeping: the hash of each memory file as this session last saw it.
+
+    Parallel tool calls fire concurrent hooks, so mutations go through `with SessionState.locked(id)`.
+    """
 
     def __init__(self, session_id: str):
         self.path = data_root() / "state" / "sessions" / f"{_safe_session(session_id)}.json"
         self.data = json.loads(self.path.read_text()) if self.path.exists() else {"seen": {}, "touched": []}
+
+    @classmethod
+    @contextlib.contextmanager
+    def locked(cls, session_id: str) -> Iterator["SessionState"]:
+        lock = data_root() / "state" / "sessions" / f"{_safe_session(session_id)}.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock, "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                state = cls(session_id)
+                yield state
+                state.save()
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
 
     def seen(self, abs_path: Path) -> Optional[str]:
         return self.data["seen"].get(str(abs_path))

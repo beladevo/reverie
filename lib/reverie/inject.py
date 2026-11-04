@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .runtime import Attachment
-from .validate import parse_frontmatter
+from .validate import MAX_DESCRIPTION, parse_frontmatter
 
 CONTRACT = """# Reverie memory
 
@@ -42,7 +42,7 @@ def _describe(attachment: Attachment, rel_path: str) -> tuple[str, str]:
     text = (attachment.tree / rel_path).read_text(errors="replace")
     meta, _ = parse_frontmatter(text)
     description = meta.get("description") if isinstance(meta.get("description"), str) else ""
-    return text, description or "(no description)"
+    return text, (description or "(no description)")[:MAX_DESCRIPTION]
 
 
 def build_context(attachments: list[Attachment], config: dict, extra_contract: str = "") -> str:

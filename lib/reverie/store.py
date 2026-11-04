@@ -142,8 +142,12 @@ class Store:
         with open(self.log_path) as f:
             for line in f:
                 line = line.strip()
-                if line:
+                if not line:
+                    continue
+                try:
                     yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
     def head_seq(self) -> int:
         seq = 0
@@ -167,17 +171,33 @@ class Store:
 
     def _append(self, entry: dict) -> dict:
         entry = {"seq": self.head_seq() + 1, "ts": now_iso(), **entry}
+        torn = self.log_path.exists() and self.log_path.stat().st_size and not self.log_path.read_bytes().endswith(b"\n")
         with open(self.log_path, "a") as f:
-            f.write(json.dumps(entry, sort_keys=True) + "\n")
+            f.write(("\n" if torn else "") + json.dumps(entry, sort_keys=True) + "\n")
             f.flush()
             os.fsync(f.fileno())
         return entry
+
+    def _absorb_external(self, rel_path: str, target: Path) -> Optional[str]:
+        """Version whatever is on disk before overwriting it, so an editor's unsaved-to-log change is never lost."""
+        current = self.state().get(rel_path)
+        on_disk = hash_file(target)
+        if on_disk == current:
+            return current
+        if on_disk is None:
+            self._append({"path": rel_path, "op": "delete", "hash": None, "parent": current,
+                          "actor": {"kind": "external", "tool": "external-edit"}, "reason": None})
+            return None
+        self.put_blob(target.read_bytes())
+        self._append({"path": rel_path, "op": "put", "hash": on_disk, "parent": current,
+                      "actor": {"kind": "external", "tool": "external-edit"}, "reason": None})
+        return on_disk
 
     def write(self, rel_path: str, data: bytes, actor: Actor, if_match: Optional[str] = "*", reason: Optional[str] = None) -> dict:
         """Write through the store. if_match: "*" skips the check, None requires the file to be absent."""
         target = self.abs(rel_path)
         with self.locked():
-            current = self.state().get(rel_path)
+            current = self._absorb_external(rel_path, target)
             if if_match != "*" and current != if_match:
                 raise ConflictError(f"{rel_path}: expected {if_match}, found {current}")
             digest = self.put_blob(data)
@@ -190,7 +210,7 @@ class Store:
     def delete(self, rel_path: str, actor: Actor, if_match: Optional[str] = "*", reason: Optional[str] = None) -> dict:
         target = self.abs(rel_path)
         with self.locked():
-            current = self.state().get(rel_path)
+            current = self._absorb_external(rel_path, target)
             if if_match != "*" and current != if_match:
                 raise ConflictError(f"{rel_path}: expected {if_match}, found {current}")
             if current is None:

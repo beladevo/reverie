@@ -31,6 +31,15 @@ class ValidateTest(unittest.TestCase):
         self.assertIn("AWS access key", find_secrets("AKIAABCDEFGHIJKLMNOP"))
         self.assertIn("Credential assignment", find_secrets("password = hunter2hunter2"))
         self.assertEqual(find_secrets("use the password reset flow"), [])
+        for leaked in ("aws_secret_access_key = wJalrXUtnFEMI/K7MDENG", "SECRET_KEY=abcdefgh1234",
+                       "DATABASE_PASSWORD=hunter2hunter2", "postgres://admin:pw@db.internal/app"):
+            self.assertTrue(find_secrets(leaked), leaked)
+        self.assertEqual(find_secrets("max_tokens: 2000"), [])
+
+    def test_caps_description_length(self):
+        text = memory("a").replace("description: about a", "description: " + "x" * 300)
+        problems = validate_memory("a.md", text, LIMITS)
+        self.assertIn("description is 300 characters", " ".join(problems))
 
 
 if __name__ == "__main__":

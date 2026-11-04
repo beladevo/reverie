@@ -4,6 +4,7 @@ import re
 from pathlib import PurePosixPath
 
 REQUIRED_FIELDS = ("name", "description", "type")
+MAX_DESCRIPTION = 200
 TYPES = ("preference", "convention", "pattern", "mistake", "fact", "reference")
 SEGMENT = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -16,7 +17,9 @@ SECRET_PATTERNS = [
     ("Private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("JWT", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")),
     ("Credential assignment", re.compile(
-        r"(?i)\b(password|passwd|secret|api[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?[^\s'\"<>{}]{8,}")),
+        r"(?i)[a-z0-9_.-]*(password|passwd|pwd|secret|api[_-]?key|access[_-]?key|token)[a-z0-9_.-]*"
+        r"['\"]?\s*[:=]\s*['\"]?[^\s'\"<>{}]{8,}")),
+    ("Credentials in URL", re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@")),
 ]
 
 
@@ -81,6 +84,9 @@ def validate_memory(rel_path: str, text: str, limits: dict) -> list[str]:
         for field in REQUIRED_FIELDS:
             if not meta.get(field):
                 problems.append(f"frontmatter is missing '{field}'")
+        description = meta.get("description")
+        if isinstance(description, str) and len(description) > MAX_DESCRIPTION:
+            problems.append(f"description is {len(description)} characters, limit is {MAX_DESCRIPTION}; it is injected into every session")
         if meta.get("type") and meta["type"] not in TYPES:
             problems.append(f"type must be one of {', '.join(TYPES)}")
     if not body.strip():

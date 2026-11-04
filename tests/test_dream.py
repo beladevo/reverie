@@ -87,6 +87,33 @@ class DreamTest(ReverieTestCase):
         time.sleep(1)
         self.assertEqual(len(list((self.data / "dreams").glob("*/result.json"))), 1, "not due again until interval passes")
 
+    def test_policy_gate_ignores_fake_or_ambiguous_citations(self):
+        from reverie.dream import _evidence
+        known = {"abc12345-0000", "abc12345-1111", "def67890-2222"}
+        self.assertEqual(_evidence({"evidence": ["", "a", "ab", "abc"]}, None, known), set())
+        self.assertEqual(_evidence({"evidence": ["abc12345"]}, None, known), set(), "ambiguous prefix")
+        self.assertEqual(_evidence({"evidence": ["abc12345-0000", "abc12345-0000", "def67890"]}, None, known),
+                         {"abc12345-0000", "def67890-2222"})
+
+    def test_crlf_proposal_is_stored_under_its_real_hash(self):
+        crlf = ROOT / "tests" / "fake_claude_crlf.py"
+        crlf.write_text(FAKE_CLAUDE.read_text().replace(
+            'Path("changes.json")',
+            '(notes / "testing/vitest-mocks.md").write_bytes((notes / "testing/vitest-mocks.md").read_bytes().replace(b"\\n", b"\\r\\n"))\nPath("changes.json")'))
+        crlf.chmod(0o755)
+        self.addCleanup(crlf.unlink)
+        self.env["REVERIE_CLAUDE_BIN"] = str(crlf)
+        record = self.dream("--mode", "auto")
+        self.assertEqual(self.ops(record)[("project.notes", "testing/vitest-mocks.md")]["status"], "applied")
+        notes_store = next((self.data / "stores").glob("*.notes"))
+        self.assertIn(b"\r\n", (notes_store / "tree/testing/vitest-mocks.md").read_bytes())
+
+    def test_dreamer_timeout_or_missing_binary_backs_off(self):
+        self.env["REVERIE_CLAUDE_BIN"] = str(self.data.parent / "no-such-claude")
+        self.assertIn("failed", self.cli("dream").stdout)
+        self.assertIn("due: False", self.cli("status").stdout, "a failed attempt must not retry on every session start")
+        self.assertIn("sessions waiting: 3", self.cli("status").stdout)
+
     def test_failed_dreamer_changes_nothing(self):
         self.env["REVERIE_CLAUDE_BIN"] = "false"
         out = self.cli("dream").stdout
