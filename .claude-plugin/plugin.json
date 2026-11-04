@@ -1,0 +1,10 @@
+{
+  "name": "reverie",
+  "version": "0.1.0",
+  "description": "Versioned Markdown memory across sessions, curated by a background dreaming job.",
+  "author": { "name": "Omri Beladev", "url": "https://github.com/beladevo" },
+  "homepage": "https://github.com/beladevo/reverie",
+  "repository": "https://github.com/beladevo/reverie",
+  "license": "MIT",
+  "keywords": ["memory", "dreaming", "knowledge", "hooks", "versioning"]
+}
