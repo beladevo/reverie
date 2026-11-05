@@ -156,7 +156,7 @@ Apply       note changes applied automatically; policy changes queued for your r
 (`dream.lookback_days`), in any worktree or clone, including sessions from before Reverie was installed.
 Reverie finds them in Claude Code's transcript folder (`~/.claude/projects/`) by their working directory.
 A session counts once it has ended or been quiet for 30 minutes (`dream.quiet_minutes`); a session you
-resume later is reviewed again for the new part. Only this repository's sessions are read.
+resume later is reviewed again, for the part after the last dream only. Only this repository's sessions are read.
 
 **When dreams run:**
 
@@ -204,7 +204,7 @@ To enable Reverie for everyone working on a repository, add this to the reposito
 
 | Action | Command | Effect |
 |---|---|---|
-| Disable | `/plugin disable reverie@reverie` | All behaviour stops. Memory stays on disk. |
+| Disable | `/plugin disable reverie@reverie` | All behaviour stops. Memory stays on disk. Sessions you run while it is off are still reviewed by the first dream after you enable it again, if they are within `dream.lookback_days`. |
 | Enable | `/plugin enable reverie@reverie` | Resumes with existing memory. |
 | Uninstall | `claude plugin uninstall reverie@reverie` | Removes the plugin **and its memory**. Add `--keep-data` to keep the memory, or export it first. |
 

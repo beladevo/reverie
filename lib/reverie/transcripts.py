@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 NOISE = re.compile(r"<(system-reminder|local-command-stdout|local-command-caveat)>.*?</\1>", re.S)
 TOOL_INPUT_KEYS = ("file_path", "command", "pattern", "path", "url", "query", "description")
@@ -53,7 +55,17 @@ def _render_entry(entry: dict) -> list[str]:
     return lines
 
 
-def condense(transcript: Path, max_chars: int) -> str:
+def _before(entry: dict, since: Optional[float]) -> bool:
+    stamp = entry.get("timestamp")
+    if since is None or not isinstance(stamp, str):
+        return False
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp() <= since
+    except ValueError:
+        return False
+
+
+def condense(transcript: Path, max_chars: int, since: Optional[float] = None) -> str:
     """Reduce a session transcript to what a reviewer needs: what was asked, said, tried, and what failed."""
     lines: list[str] = []
     if not transcript.is_file():
@@ -65,7 +77,7 @@ def condense(transcript: Path, max_chars: int) -> str:
                     entry = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
-                if isinstance(entry, dict):
+                if isinstance(entry, dict) and not _before(entry, since):
                     lines.extend(_render_entry(entry))
     except FileNotFoundError:
         return ""

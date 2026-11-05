@@ -43,7 +43,7 @@ Project-scoped (everyone on a repo gets it): add to the repo's `.claude/settings
 
 | | |
 |---|---|
-| Turn off | `/plugin disable reverie@reverie` — no hooks, no injection, no dreaming. Memory stays on disk. |
+| Turn off | `/plugin disable reverie@reverie` — no hooks, no injection, no dreaming. Memory stays on disk. Sessions from while it was off are reviewed after you re-enable it (within `dream.lookback_days`; set it to `0` to avoid). |
 | Turn on | `/plugin enable reverie@reverie` — picks up where it left off. |
 | Remove | `claude plugin uninstall reverie@reverie` — also deletes all memory data. Add `--keep-data` to keep it, or `/reverie:export` first. |
 

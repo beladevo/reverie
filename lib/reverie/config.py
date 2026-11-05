@@ -107,6 +107,10 @@ class Project:
     label: str
 
 
+def in_git_repo(path: Path) -> bool:
+    return _git(path, "rev-parse", "--show-toplevel") is not None
+
+
 def detect_project(cwd: Path) -> Project:
     cwd = Path(cwd).resolve()
     common_dir = _git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")

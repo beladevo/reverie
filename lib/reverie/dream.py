@@ -62,7 +62,7 @@ def unconsumed_sessions(project: Project, config: dict) -> list[dict]:
 def dream_gap(project_state: dict, config: dict, waiting: int) -> timedelta:
     """A backlog larger than one dream can take is worked off hourly, unless the last attempt failed."""
     succeeded = (project_state.get("last_dream_at") or "") >= (project_state.get("last_attempt_at") or "")
-    if waiting >= config["dream"]["max_sessions"] and succeeded:
+    if waiting > config["dream"]["max_sessions"] and succeeded:
         return BACKLOG_GAP
     return timedelta(hours=config["dream"]["schedule"]["interval_hours"])
 
@@ -76,8 +76,10 @@ def is_due(project: Project, config: dict) -> bool:
     if not schedule.get("enabled"):
         return False
     project_state = load_state()["projects"].get(project.id, {})
-    waiting = len(unconsumed_sessions(project, config))
     last = last_try(project_state)
+    if last and datetime.now(timezone.utc) - _parse_ts(last) < BACKLOG_GAP:
+        return False
+    waiting = len(unconsumed_sessions(project, config))
     if last and datetime.now(timezone.utc) - _parse_ts(last) < dream_gap(project_state, config, waiting):
         return False
     return waiting >= schedule["min_sessions"]
@@ -367,7 +369,10 @@ def run(cwd: Path, mode: Optional[str] = None, trigger: str = "manual") -> dict:
             transcript = Path(s.get("transcript_path") or "")
             s["mtime"] = transcript.stat().st_mtime if transcript.is_file() else None
         for s in sessions:
-            digest = condense(Path(s.get("transcript_path") or ""), config["dream"]["digest_chars_per_session"])
+            digest = condense(Path(s.get("transcript_path") or ""), config["dream"]["digest_chars_per_session"],
+                              since=s.get("reviewed_until"))
+            if digest and s.get("reviewed_until"):
+                digest = "(resumed session: only activity since the last dream is shown)\n\n" + digest
             (dream_dir / "digest" / f"{s['session_id']}.md").write_text(digest or "(transcript unavailable)")
         record = {"id": dream_id, "project": project.id, "trigger": trigger, "mode": config["dream"]["mode"],
                   "cwd": str(cwd), "started_at": now_iso(), "sessions": [s["session_id"] for s in sessions],

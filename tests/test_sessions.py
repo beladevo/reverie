@@ -28,12 +28,13 @@ class SessionDiscoveryTest(ReverieTestCase):
     def transcript(self, sid, cwd, age_seconds, text="use vi.hoisted please"):
         path = self.projects / str(cwd).replace("/", "-") / f"{sid}.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
+        stamp = time.time() - age_seconds
+        at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(stamp - 60))
         path.write_text("\n".join(json.dumps(e) for e in [
             {"type": "permission-mode", "sessionId": sid},
-            {"type": "user", "cwd": str(cwd), "sessionId": sid, "message": {"role": "user", "content": text}},
-            {"type": "assistant", "cwd": str(cwd), "sessionId": sid, "message": {"content": [{"type": "text", "text": "ok"}]}},
+            {"type": "user", "cwd": str(cwd), "sessionId": sid, "timestamp": at, "message": {"role": "user", "content": text}},
+            {"type": "assistant", "cwd": str(cwd), "sessionId": sid, "timestamp": at, "message": {"content": [{"type": "text", "text": "ok"}]}},
         ]) + "\n")
-        stamp = time.time() - age_seconds
         os.utime(path, (stamp, stamp))
         return path
 
@@ -52,6 +53,15 @@ class SessionDiscoveryTest(ReverieTestCase):
         waiting, active = self.inventory()
         self.assertEqual(waiting, ["s-gone", "s-worktree", "s-main"])
         self.assertEqual(active, ["s-live"])
+
+    def test_removed_directory_outside_a_repo_is_not_claimed_by_its_parent(self):
+        self.transcript("s-sibling", self.project.parent / "removed-sibling", HOUR)
+        self.transcript("s-dreamer", self.data / "dreams" / "20990101T000000Z-abcd", HOUR)
+        parent = detect_project(self.project.parent)
+        waiting, active = dream.session_inventory(parent, load_config(parent)[0])
+        self.assertEqual((waiting, active), ([], []))
+        cache = json.loads((self.data / "state" / "transcripts.json").read_text())
+        self.assertEqual({v["project"] for v in cache.values()}, {None})
 
     def test_ended_session_is_not_listed_twice_or_held_back(self):
         path = self.transcript("s-ended", self.project, 30)
@@ -74,11 +84,19 @@ class SessionDiscoveryTest(ReverieTestCase):
         self.assertEqual(self.inventory(), ([], []))
 
         with open(path, "a") as f:
-            f.write(json.dumps({"type": "user", "cwd": str(self.worktree), "message": {"content": "again"}}) + "\n")
+            f.write(json.dumps({"type": "user", "cwd": str(self.worktree), "timestamp": "2099-01-01T00:00:00.000Z",
+                                "message": {"content": "resumed and asked again"}}) + "\n")
         self.assertEqual(self.inventory(), ([], ["s-long"]))
         stamp = time.time() - HOUR
         os.utime(path, (stamp, stamp))
         self.assertEqual(self.inventory(), (["s-long"], []))
+
+        state = dream.load_state()
+        consumed = state["projects"][detect_project(self.project).id]["consumed_mtime"]["s-long"]
+        from reverie.transcripts import condense
+        digest = condense(path, 10000, since=consumed)
+        self.assertNotIn("use vi.hoisted please", digest)
+        self.assertIn("USER: resumed and asked again", digest)
 
     def test_backlog_is_deferred_and_worked_off_hourly(self):
         FAKE_CLAUDE.chmod(0o755)

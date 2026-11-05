@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from .config import claude_home, data_root, detect_project
+from .config import claude_home, data_root, detect_project, in_git_repo
 from .store import atomic_write
 
 HEAD_LINES = 50
+SAVE_EVERY = 25
 
 
 def _iso(timestamp: float) -> str:
@@ -46,13 +47,16 @@ def _transcript_cwd(path: Path) -> Optional[str]:
 
 
 def _project_of(cwd: str) -> Optional[str]:
-    """A removed worktree no longer exists on disk; its nearest surviving ancestor is still inside the repo."""
-    path = Path(cwd)
-    if str(path).startswith(str(data_root())):
+    """A removed worktree inside a repo maps through its nearest surviving ancestor, but only if that ancestor is
+    in a git repo: a removed directory outside any repo must not fall through to whatever folder contained it."""
+    path = Path(cwd).resolve()
+    if path.is_relative_to(data_root().resolve()):
         return None
+    if path.exists():
+        return detect_project(path).id
     while not path.exists() and path != path.parent:
         path = path.parent
-    return detect_project(path).id
+    return detect_project(path).id if in_git_repo(path) else None
 
 
 def discover(lookback_days: float) -> list[dict]:
@@ -66,7 +70,8 @@ def discover(lookback_days: float) -> list[dict]:
     except (OSError, json.JSONDecodeError):
         cache = {}
     projects: dict = {}
-    found, changed = [], False
+    kept: dict = {}
+    found, added = [], 0
     for path in (claude_home() / "projects").glob("*/*.jsonl"):
         try:
             mtime = path.stat().st_mtime
@@ -82,13 +87,16 @@ def discover(lookback_days: float) -> list[dict]:
             if cwd not in projects:
                 projects[cwd] = _project_of(cwd)
             info = cache[str(path)] = {"cwd": cwd, "project": projects[cwd]}
-            changed = True
+            added += 1
+            if added % SAVE_EVERY == 0:
+                atomic_write(cache_path, json.dumps(cache).encode())
+        kept[str(path)] = info
         if info["project"]:
             found.append({"session_id": path.stem, "transcript_path": str(path), "cwd": info["cwd"],
                           "project": info["project"], "ended_at": _iso(mtime), "mtime": mtime,
                           "reason": "found in transcripts", "touched": []})
-    if changed:
-        atomic_write(cache_path, json.dumps(cache).encode())
+    if added or len(kept) != len(cache):
+        atomic_write(cache_path, json.dumps(kept).encode())
     return found
 
 
@@ -108,7 +116,7 @@ def inventory(project_id: str, project_state: dict, dream_config: dict) -> tuple
     by_id: dict = {}
     for record in recorded():
         if record.get("project") == project_id:
-            by_id.setdefault(record["session_id"], dict(record))
+            by_id[record["session_id"]] = dict(record)
     for record in discover(dream_config["lookback_days"]):
         if record["project"] != project_id:
             continue
@@ -122,8 +130,10 @@ def inventory(project_id: str, project_state: dict, dream_config: dict) -> tuple
         if mtime is not None and now - mtime < quiet and not _ended_after(record, mtime):
             active.append(record)
             continue
-        if sid in consumed and (mtime is None or sid not in consumed_mtime or mtime <= consumed_mtime[sid] + 1):
-            continue
+        if sid in consumed:
+            if mtime is None or sid not in consumed_mtime or mtime <= consumed_mtime[sid] + 1:
+                continue
+            record["reviewed_until"] = consumed_mtime[sid]
         waiting.append(record)
     order = lambda r: r.get("ended_at") or ""
     return sorted(waiting, key=order), sorted(active, key=order)
