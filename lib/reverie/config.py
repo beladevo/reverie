@@ -44,15 +44,30 @@ def claude_home() -> Path:
 
 
 def data_root() -> Path:
-    """Hooks get CLAUDE_PLUGIN_DATA; Bash-tool runs of bin/reverie don't, so they find the same dir by name."""
+    """Hooks get CLAUDE_PLUGIN_DATA; terminal and Bash-tool runs of bin/reverie don't, so they work out the same dir."""
     explicit = os.environ.get("REVERIE_DATA") or os.environ.get("CLAUDE_PLUGIN_DATA")
-    if explicit:
-        root = Path(explicit)
-    else:
-        installed = sorted((claude_home() / "plugins" / "data").glob("reverie-*"))
-        root = installed[0] if installed else claude_home() / "reverie-data"
+    root = Path(explicit) if explicit else plugin_data_dir(Path(__file__)) or _most_active_data_dir()
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def plugin_data_dir(source: Path) -> Optional[Path]:
+    """An installed plugin runs from plugins/cache/<marketplace>/<plugin>/<version>/; its data is plugins/data/<plugin>-<marketplace>."""
+    try:
+        marketplace, plugin = source.resolve().relative_to((claude_home() / "plugins" / "cache").resolve()).parts[:2]
+    except ValueError:
+        return None
+    return claude_home() / "plugins" / "data" / f"{plugin}-{marketplace}"
+
+
+def _last_session_at(directory: Path) -> float:
+    sessions = directory / "sessions.jsonl"
+    return sessions.stat().st_mtime if sessions.exists() else 0
+
+
+def _most_active_data_dir() -> Path:
+    installed = sorted((claude_home() / "plugins" / "data").glob("reverie-*"))
+    return max(installed, key=_last_session_at) if installed else claude_home() / "reverie-data"
 
 
 def deep_merge(base: dict, override: dict) -> dict:

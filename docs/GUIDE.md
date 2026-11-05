@@ -1,6 +1,6 @@
 # Reverie — Product Guide
 
-**Version:** 0.2.0  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
+**Version:** 0.2.1  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
 
 ---
 
