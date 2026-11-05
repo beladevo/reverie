@@ -130,7 +130,7 @@ A team can also share a committed, read-only policy directory:
 - `dream.mode`: `auto` applies validated note changes immediately; `review` queues everything.
   Policy changes always wait for review unless `auto_promote` is `true`.
 - Scheduled dreams start in the background at session start when due. They use your Claude Code login
-  and quota. Set `schedule.enabled: false` to only dream on demand.
+  and quota. Set `dream.schedule.enabled: false` to only dream on demand.
 - `redirect_builtin_memory`: while Reverie is enabled, writes to Claude Code's built-in auto-memory
   directory are redirected to Reverie stores, so there's one memory system. To silence the built-in one
   entirely, set `"autoMemoryEnabled": false` in your settings (a plugin cannot change that for you).

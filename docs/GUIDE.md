@@ -1,6 +1,6 @@
 # Reverie — Product Guide
 
-**Version:** 0.1.0  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
+**Version:** 0.2.0  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
 
 ---
 
@@ -28,18 +28,18 @@ Code plugin and can be turned on or off with a single command.
 | Capability | What it provides |
 |---|---|
 | **Persistent memory** | Knowledge survives across sessions, worktrees and restarts. |
-| **Automatic recall** | An index of relevant memory is loaded into every session at startup. Nothing to configure. |
+| **Automatic recall** | An index of memory is loaded into every session at startup. Nothing to configure. |
 | **Guided capture** | Claude is told when to save something (corrections, preferences, non-obvious fixes) and when not to (task progress, secrets, facts the code already shows). |
-| **Full version history** | Every change is kept as a separate, unchangeable version. Nothing is overwritten or lost. |
+| **Full version history** | Every change is kept as a separate, unchangeable version. Changes made outside Claude's file tools are recorded at the next session start or dream. |
 | **Rollback** | Restore a single file, or a whole store, to any earlier version. |
 | **Audit trail** | Every version records who made it: which session and tool, which dream, or which human edit. |
 | **Safe concurrent use** | Several sessions can share memory. A session that hasn't seen another session's change is stopped and asked to re-read first. |
 | **Trusted vs raw knowledge** | Curated *policy* is kept apart from raw *notes*. Claude can't write policy directly. |
-| **Quality controls** | Every write is checked for format, size, file count and leaked credentials. |
+| **Quality controls** | Claude's writes are checked for format, size, file count and leaked credentials. |
 | **Dreaming** | Scheduled or on-demand curation of memory, based on evidence from real sessions. |
 | **Human review** | Policy changes, and optionally all changes, wait for your approval. |
 | **Dashboard** | A live terminal view of stores, files and their history, dreams and waiting sessions, with review built in. |
-| **Export** | A complete archive (with history) or a single readable Markdown document. |
+| **Export** | An archive of every store with its full history, or a single readable Markdown document. |
 | **Clean on/off switch** | Disabling the plugin stops all behaviour. It never edits your settings, `CLAUDE.md` or system scheduler. |
 
 ---
@@ -57,8 +57,9 @@ Three stores are attached by default:
 | `project.notes` | The current project | Read and write | Observations: mistakes and fixes, patterns, project facts |
 | `project.policy` | The current project | **Read only** | Curated, trusted rules for the project |
 
-Project stores are tied to the repository (by its git remote), so every clone and worktree of the same
-repository shares one memory.
+Project stores are tied to the repository by its `origin` remote, so every clone and worktree of the same
+repository shares one memory. A repository without a remote is identified by its path: its worktrees share
+memory, separate clones don't.
 
 Each memory file follows a standard format:
 
@@ -90,13 +91,13 @@ Claude learns something ─► writes a memory file
 Session ends ─► the session is queued for the next dream
 ```
 
-- **Loading:** at startup Claude receives a short index of every memory file (its path and a one-line
-  description) plus the full text of short policy files. This is capped at about 2,000 tokens. Claude
-  opens individual files only when they are relevant.
+- **Loading:** at startup Claude receives the usage rules, an index of memory files (path and one-line
+  description, policy first) and the full text of short policy files. The whole block is capped at about
+  2,000 tokens; files past the cap are left out of the index. Claude opens individual files when relevant.
 - **Writing:** Claude uses its normal file tools. Reverie checks each write before it happens and saves
   a version after it happens. A rejected write comes back with the reason, so Claude can fix it.
 - **One memory system:** while Reverie is enabled, writes aimed at Claude Code's built-in auto-memory
-  are redirected to Reverie, so knowledge isn't split between two places.
+  are blocked with a pointer to the right Reverie store, so knowledge isn't split between two places.
 
 ### 3.3 Version history and concurrency
 
@@ -114,7 +115,7 @@ Dreaming is the curation step. It runs outside your working sessions and changes
 validated, evidence-backed edits.
 
 ```
-Collect     snapshot of each store + sessions not yet reviewed
+Collect     snapshot of each store + up to 20 sessions not yet reviewed
    │
 Condense    each session transcript reduced to requests, answers, actions and errors
    │
@@ -139,20 +140,25 @@ Apply       note changes applied automatically; policy changes queued for your r
 **Safeguards:**
 
 - Every change needs a written rationale. A change without one is rejected.
-- A new or changed policy rule must be supported by at least **3 distinct sessions** (configurable).
+- A new or changed policy rule must cite at least **3 distinct real sessions** as evidence (configurable).
 - Policy changes always wait for human review unless you explicitly allow automatic promotion.
-- When a note is promoted, the note stays in place until you decide on the promotion.
+- When a note is promoted, deleting the note is a separate pending change. If you reject the promotion,
+  reject that change too, or accept changes one by one with `--ops`.
 - The dreaming run can only read and write inside its own working folder. It cannot use the shell, the
   web, MCP servers or other plugins.
 - Your live memory is never edited in place. Changes are applied as new versions, so the state before
   any dream can always be restored.
 - A failed dream changes nothing and doesn't immediately retry.
+- A dream reviews at most 20 waiting sessions (`dream.max_sessions`). Older waiting sessions are marked as
+  reviewed and skipped, so dream at least that often if you work in many short sessions.
 
 **When dreams run:**
 
-- **Automatically:** at the start of a session, once 24 hours have passed since the last dream *and* at
-  least 5 sessions are waiting. The dream runs in the background and does not slow the session down.
-- **On demand:** with `/reverie:dream`.
+- **Automatically:** when a new session starts (not on resume), once 24 hours have passed since the last
+  dream or failed attempt *and* at least 5 sessions are waiting. The dream runs in the background and does not slow the session down.
+- **On demand:** with `/reverie:dream`, or `n` in the dashboard.
+
+A dream that has already started finishes even if you disable the plugin meanwhile.
 
 Each dream produces a report (`REPORT.md`) listing every change, its rationale, its evidence and a diff.
 
@@ -210,7 +216,7 @@ No routine action is needed. Work as usual:
 
 | Command | Purpose |
 |---|---|
-| `/reverie:status` | Attached stores, file counts, configuration, dream schedule, items awaiting review |
+| `/reverie:status` | Attached stores, file counts, config sources, dream schedule, items awaiting review |
 | `/reverie:dream` | Run a dream now. Add `--mode review` to only propose changes. |
 | `/reverie:review` | Go through proposed changes and accept or reject each one |
 | `/reverie:history` | View a store's history, read an earlier version, or roll back |
@@ -223,18 +229,22 @@ The same operations are available in a terminal through `bin/reverie` in the rep
 plugin is enabled, Claude can also run them as `reverie`.
 
 ```bash
-reverie status                                    # overview
+reverie status                                    # overview (--json for the effective config)
+reverie stores                                    # every store with its full id
 reverie log project.notes                         # history of a store
-reverie show project.notes testing/mocks.md@12    # a file as of version 12
-reverie rollback project.notes --to-seq 12        # restore a store to version 12
+reverie show project.notes testing/mocks.md@12    # a file as of store version 12
+reverie rollback project.notes --to-seq 12        # restore a store to store version 12
 reverie dream --mode review                       # propose changes only
 reverie dreams                                    # list dreams
 reverie review <dream-id>                         # read a dream's report
 reverie accept <dream-id> --ops 1,3               # apply selected changes
 reverie reject <dream-id>                         # reject the remaining changes
-reverie export ~/memory.tar.gz                    # full archive with history
+reverie export ~/memory.tar.gz                    # stores with full history (dream reports excluded)
 reverie export ~/memory.md --format md            # one readable document
 ```
+
+Version numbers (`seq`) count every change in a store, so `@12` means "this file as it was after the
+store's 12th change". `reverie log` shows them.
 
 ### 5.3 Dashboard
 
@@ -247,6 +257,8 @@ needs its own terminal window; `/reverie:dashboard` gives you the exact command.
 | 2 Memory | Every store as a file tree. Select a file to read it; press → for its version history and the diff each version made |
 | 3 Dreams | Each dream's summary and changes, with the rationale, evidence, problems and diff of each. `a` accepts and `x` rejects a pending change |
 | 4 Sessions | Sessions waiting to be dreamed over, and the condensed transcript the dreamer will read |
+
+`n`, `a` and `x` ask for confirmation (`y`) before doing anything.
 
 Keys: `1`–`4` switch tabs, ↑↓ move, → opens, ← goes back, PgUp/PgDn scroll, `n` starts a dream in the
 background, `q` quits. `reverie dashboard --once` prints the overview and exits.
@@ -281,7 +293,7 @@ Settings are optional. Put them in:
 | `inject.max_tokens` | `2000` | Maximum memory loaded at session start |
 | `limits.file_bytes` | `4096` | Maximum size of one memory file |
 | `limits.files_per_store` | `300` | Maximum files per store |
-| `redirect_builtin_memory` | `true` | Redirect Claude Code's built-in memory writes to Reverie |
+| `redirect_builtin_memory` | `true` | Block Claude Code's built-in memory writes and point Claude to Reverie |
 
 **Sharing team rules.** A team can commit a read-only policy folder to its repository and attach it:
 
@@ -295,6 +307,9 @@ Settings are optional. Put them in:
   ]
 }
 ```
+
+A `path` attachment is relative to the repository root and is always read-only to Claude. It is changed
+through your normal review process, not versioned by Reverie and not edited by dreams.
 
 ---
 
@@ -311,8 +326,10 @@ Settings are optional. Put them in:
 | `dreams/<id>/` | Each dream's inputs, proposal and report |
 | `sessions.jsonl` | Sessions queued for dreaming |
 
-Nothing is sent anywhere except the dreaming run. That run uses your existing Claude Code login and counts
-against your usage.
+Reverie makes no network calls of its own. Memory reaches the model as part of your sessions (the index
+loaded at startup and files Claude opens), and during dreaming, which also sends condensed transcripts of
+your sessions, including your prompts. Dreaming uses your existing Claude Code login and counts against
+your usage.
 
 **Controls in place:**
 
@@ -323,12 +340,14 @@ against your usage.
 | Memory growing without limit | Size and count limits per file and store; a cap on what loads at session start; pruning during dreams |
 | Wrong knowledge reinforced | Every change must cite evidence; contradiction checks; review mode available |
 | Lost or overwritten knowledge | Every version is kept; rollback; external edits recorded before any overwrite |
-| Plugin faults affecting your work | Internal errors are logged and never block Claude's actions |
+| Plugin faults affecting your work | Internal errors are logged and never block Claude's actions (the write then goes through unchecked) |
 
-**Known limitations (v0.1):**
+**Known limitations:**
 
-- Read-only protection covers Claude's file tools. A change made to a policy file through shell commands is
-  detected and recorded, but not blocked.
+- Read-only protection, format checks and secret checks cover Claude's file tools (Write, Edit). A change
+  made through shell commands or an editor isn't checked or blocked; it is recorded at the next session
+  start or dream. If such a file changes twice before then, only the latest state is kept.
+- Setting `REVERIE_DISABLE=1` in the environment turns all hooks off for that process.
 - Windows isn't supported yet.
 - Claude Code's built-in memory is redirected, not switched off. To turn it off completely, set
   `"autoMemoryEnabled": false` in your Claude Code settings.
@@ -342,7 +361,7 @@ against your usage.
 | Memory doesn't seem to load | Run `/reverie:status` to confirm stores are attached and the plugin is enabled |
 | "Read … before changing it" | Expected. Claude must read the current version before editing it. |
 | "changed since you last read it" | Another session or a dream updated the file. Claude should re-read it and merge. |
-| A write was rejected | The message lists the reasons (format, size, secret, read-only). Fix them and retry. |
-| Dreams never run | Check `sessions waiting` and `due` in `/reverie:status`; confirm `schedule.enabled` |
+| A write was rejected | The message lists the reasons. A memory file must be a kebab-case `.md` path at most 3 folders deep, under 4 KB, with `name`, `description` (200 characters max) and `type` frontmatter, a non-empty body and no secrets. |
+| Dreams never run | Check `sessions waiting` and `due` in `/reverie:status`; confirm `dream.schedule.enabled`. Automatic dreams start only with a new session, not a resumed one. |
 | A dream failed | Its folder under `dreams/` holds `dreamer.out` with the details |
 | Hook errors | Listed in `errors.log` in the data directory, and shown by `/reverie:status` |
