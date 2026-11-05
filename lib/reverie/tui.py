@@ -10,7 +10,7 @@ from . import dashboard as views
 from . import dream
 
 TABS = ("Overview", "Memory", "Dreams", "Sessions")
-EMPTY = {1: "no memory stores attached", 2: "no dreams yet, press n to dream now", 3: "no sessions waiting to be dreamed over"}
+EMPTY = {1: "no memory stores attached", 2: "no dreams yet", 3: "no sessions waiting to be dreamed over"}
 REFRESH_SECONDS = 2
 MIN_SIZE = (12, 60)
 HINTS = {
@@ -44,13 +44,14 @@ def _styles() -> dict:
 class App:
     def __init__(self, screen, cwd: Path):
         self.screen, self.cwd = screen, cwd
-        self.attrs = _styles()
+        self.attrs: dict = {}
         self.tab = 0
         self.cursor = {1: 0, 2: 0, 3: 0}
         self.top = {1: 0, 2: 0, 3: 0}
         self.focus_detail = False
         self.detail_index = 0
         self.scroll = 0
+        self.follow = False
         self.confirm = None
         self.message = ("", "")
         self.items = {1: [], 2: [], 3: []}
@@ -63,8 +64,14 @@ class App:
 
     def load(self) -> None:
         selected = {tab: self._key(tab, items[self.cursor[tab]]) for tab, items in self.items.items() if items}
-        self.snap = views.take(self.cwd)
         self.loaded_at = time.monotonic()
+        try:
+            self.snap = views.take(self.cwd)
+        except Exception as error:
+            if not hasattr(self, "snap"):
+                raise
+            self.message = (f"refresh failed, showing the last good data: {error}", "bad")
+            return
         self.items = {1: views.memory_nodes(self.snap), 2: views.dream_rows(self.snap), 3: self.snap.waiting}
         for tab, items in self.items.items():
             keys = [self._key(tab, item) for item in items]
@@ -73,6 +80,7 @@ class App:
             self.cursor[tab] = min(self.cursor[tab], max(len(items) - 1, 0))
 
     def run(self) -> None:
+        self.attrs = _styles()
         try:
             curses.curs_set(0)
         except curses.error:
@@ -142,7 +150,7 @@ class App:
             self.move(1)
         elif key in (curses.KEY_RIGHT, ord("l"), 10, 13, curses.KEY_ENTER):
             if self.tab and self.selected() is not None and not self.focus_detail:
-                self.focus_detail, self.detail_index, self.scroll = True, 0, 0
+                self.focus_detail, self.detail_index, self.scroll, self.follow = True, 0, 0, True
         elif key in (curses.KEY_LEFT, ord("h"), 27):
             self.focus_detail, self.scroll = False, 0
         elif key in (curses.KEY_NPAGE, ord(" ")):
@@ -152,6 +160,8 @@ class App:
         elif key == ord("r"):
             self.load()
             self.message = ("refreshed", "dim")
+        elif key == ord("n") and not self.snap.waiting:
+            self.message = ("no sessions waiting to dream over", "warn")
         elif key == ord("n"):
             self.ask("Start a dream for this project now? It runs in the background on your Claude login. (y/n)", ("dream",))
         elif key in (ord("a"), ord("x")):
@@ -166,6 +176,7 @@ class App:
         if mode in ("history", "ops"):
             _, _, count = self.detail(80)
             self.detail_index = min(max(self.detail_index + delta, 0), max(count - 1, 0))
+            self.follow = True
         elif mode in ("overview", "detail"):
             self.scroll = max(0, self.scroll + delta)
         elif self.items[self.tab]:
@@ -275,7 +286,8 @@ class App:
 
     def draw_detail(self, y: int, x: int, height: int, width: int) -> None:
         rows, anchor, _ = self.detail(width)
-        if anchor is not None:
+        if anchor is not None and self.follow:
+            self.follow = False
             if anchor < self.scroll:
                 self.scroll = anchor
             elif anchor >= self.scroll + height:

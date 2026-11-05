@@ -1,3 +1,4 @@
+import curses
 import fcntl
 import json
 import os
@@ -12,7 +13,7 @@ import unittest
 
 from helpers import BIN, ROOT, ReverieTestCase, memory
 
-from reverie import dashboard, dream
+from reverie import dashboard, dream, tui
 from reverie.config import detect_project
 
 FAKE_CLAUDE = ROOT / "tests" / "fake_claude.py"
@@ -106,10 +107,14 @@ class DashboardTest(DashboardCase):
     def test_running_dream_is_detected(self):
         project = detect_project(self.project)
         self.assertIsNone(dream.running(project))
+        leftover = dream.dreams_dir() / "20991231T000000Z-dead"
+        leftover.mkdir()
+        (leftover / "input.json").write_text(json.dumps({"project": project.id, "sessions": ["s-old"]}))
         with dream._project_lock(project):
             (dream.dreams_dir() / "20991231T000000Z-beef").mkdir()
             (dream.dreams_dir() / "20991231T000000Z-beef" / "input.json").write_text(json.dumps(
                 {"project": project.id, "started_at": "2026-11-05T10:00:00Z", "sessions": ["s-aaa"]}))
+            (dream.dreams_dir() / f"{project.id}.running").write_text("20991231T000000Z-beef")
             snap = self.snap()
             self.assertEqual(snap.running["sessions"], ["s-aaa"])
             self.assertEqual(dashboard.next_dream(snap)[0], "running now")
@@ -120,6 +125,57 @@ class DashboardTest(DashboardCase):
         snap = self.snap()
         rows = dashboard.session_view(snap, snap.waiting[0], 80)
         self.assertIn(("USER: use vi.hoisted please", "accent"), rows)
+
+
+class FakeScreen:
+    def __init__(self, rows, cols):
+        self.size = (rows, cols)
+
+    def getmaxyx(self):
+        return self.size
+
+    def addnstr(self, *args):
+        pass
+
+    def erase(self):
+        pass
+
+    def refresh(self):
+        pass
+
+
+class DashboardAppTest(DashboardCase):
+    def app(self, rows=14):
+        return tui.App(FakeScreen(rows, 100), self.project)
+
+    def test_page_down_scrolls_past_the_selected_change(self):
+        self.dream_now("review")
+        app = self.app()
+        for key in (ord("3"), ord("l")):
+            app.handle(key)
+        app.draw()
+        for _ in range(3):
+            app.handle(curses.KEY_NPAGE)
+            app.draw()
+        self.assertGreater(app.scroll, 8)
+        app.handle(ord("j"))
+        app.draw()
+        self.assertLessEqual(app.scroll, 12)
+
+    def test_bad_config_keeps_last_good_snapshot(self):
+        app = self.app()
+        (self.project / ".claude").mkdir()
+        (self.project / ".claude" / "reverie.json").write_text("{not json")
+        app.load()
+        self.assertEqual(app.message[1], "bad")
+        self.assertIn("project.notes", [a.name for a in app.snap.attachments])
+
+    def test_dream_needs_waiting_sessions(self):
+        self.dream_now("auto")
+        app = self.app()
+        app.handle(ord("n"))
+        self.assertIsNone(app.confirm)
+        self.assertEqual(app.message, ("no sessions waiting to dream over", "warn"))
 
 
 class DashboardTerminalTest(DashboardCase):

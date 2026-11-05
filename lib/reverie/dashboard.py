@@ -278,7 +278,7 @@ def node_view(snap: Snapshot, node: Node, width: int) -> list:
     else:
         rows.append(("read-only directory attached from the project", "dim"))
     rows.append((str(att.tree), "dim"))
-    if att.kind == "policy":
+    if att.store and att.kind == "policy":
         rows.append(("Claude can read but not write this store; it changes through dreaming and your review.", "accent"))
     return rows + [("", "")] + _file_index(snap, att, "", width)
 
