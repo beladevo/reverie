@@ -34,6 +34,7 @@ class Snapshot:
     files: dict
     logs: dict
     waiting: list
+    active: list
     project_state: dict
     dreams: list
     running: Optional[dict]
@@ -56,11 +57,12 @@ def take(cwd: Path) -> Snapshot:
     project = detect_project(cwd)
     config, sources = load_config(project)
     attachments = resolve_attachments(config, project)
+    waiting, active = dream.session_inventory(project, config)
     return Snapshot(
         cwd=cwd, project=project, config=config, sources=sources, attachments=attachments,
         files={a.name: a.files() for a in attachments},
         logs={a.name: list(a.store.log()) if a.store else [] for a in attachments},
-        waiting=dream.unconsumed_sessions(project),
+        waiting=waiting, active=active,
         project_state=dream.load_state()["projects"].get(project.id, {}),
         dreams=dream.list_dreams(project), running=dream.running(project),
         errors=_hook_errors(), now=datetime.now(timezone.utc),
@@ -152,9 +154,9 @@ def next_dream(snap: Snapshot) -> tuple:
         return "running now", "accent"
     if not schedule.get("enabled"):
         return "schedule off, run on demand (n)", "dim"
-    stamps = [snap.project_state.get("last_dream_at"), snap.project_state.get("last_attempt_at")]
-    last = max(filter(None, stamps), default=None)
-    remaining = parse_ts(last) + timedelta(hours=schedule["interval_hours"]) - snap.now if last else timedelta(0)
+    last = dream.last_try(snap.project_state)
+    gap = dream.dream_gap(snap.project_state, snap.config, len(snap.waiting))
+    remaining = parse_ts(last) + gap - snap.now if last else timedelta(0)
     missing = schedule["min_sessions"] - len(snap.waiting)
     reasons = []
     if remaining > timedelta(0):
@@ -198,6 +200,9 @@ def overview(snap: Snapshot, width: int) -> list:
     text, style = next_dream(snap)
     rows.append((f"  next dream    {text}", style))
     rows.append((f"  waiting       {plural(len(snap.waiting), 'session')}", ""))
+    if snap.active:
+        rows.append((f"  in progress   {plural(len(snap.active), 'session')}, counted once quiet for "
+                     f"{snap.config['dream']['quiet_minutes']}m", "dim"))
     pending = pending_count(snap)
     rows.append((f"  needs review  {plural(pending, 'change')}" + ("  → Dreams tab (3)" if pending else ""),
                  "warn" if pending else ""))
@@ -353,7 +358,7 @@ def dream_view(snap: Snapshot, record: dict, index: Optional[int], width: int) -
             (f"{status} · trigger {record.get('trigger')} · mode {record.get('mode')}", STATUS_STYLE.get(status, "")),
             (f"{local(record.get('started_at'))} → {local(record.get('finished_at'))} · "
              f"{plural(len(record.get('sessions', [])), 'session')} reviewed"
-             + (f", {len(record['skipped_sessions'])} skipped" if record.get("skipped_sessions") else ""), "dim")]
+             + (f", {len(record['deferred_sessions'])} left for the next dream" if record.get("deferred_sessions") else ""), "dim")]
     if record.get("summary"):
         rows += [("", "")] + wrap(record["summary"], width)
     if record.get("error"):
@@ -402,7 +407,7 @@ def _digest(path: str, mtime: float, limit: int) -> str:
 
 def session_view(snap: Snapshot, record: dict, width: int) -> list:
     rows = [(f"session {record.get('session_id')}", "title"),
-            (f"ended {local(record.get('ended_at'))} · {record.get('reason') or 'unknown reason'}", "dim"),
+            (f"last activity {local(record.get('ended_at'))} · {record.get('reason') or 'unknown reason'}", "dim"),
             (f"cwd {record.get('cwd')}", "dim"),
             ("wrote to " + (", ".join(record.get("touched") or []) or "no memory stores"), "dim"),
             ("", ""), ("WHAT THE DREAMER WILL READ", "title")]
@@ -418,4 +423,5 @@ def session_view(snap: Snapshot, record: dict, width: int) -> list:
 
 
 def sessions_header(snap: Snapshot) -> str:
-    return f"{plural(len(snap.waiting), 'session')} waiting · {len(snap.project_state.get('consumed', []))} already dreamed over"
+    return (f"{plural(len(snap.waiting), 'session')} waiting · {len(snap.active)} in progress · "
+            f"{len(snap.project_state.get('consumed', []))} already dreamed over")

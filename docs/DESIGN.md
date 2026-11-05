@@ -429,8 +429,15 @@ Where the shipped code differs from the plan above, and why:
   doesn't know is versioned first (`actor.kind = external`) and an `if_match` against the old version fails.
 - **Failed dreams back off.** Every attempt records `last_attempt_at`; timeouts and a missing `claude` binary
   are recorded as failed dreams instead of crashing.
-- **Sessions consumed** are tracked per project in `dreams/state.json`; a failed dream consumes nothing. When more than
-  `max_sessions` are waiting, only the newest are digested and the older ones are marked consumed.
+- **Sessions come from transcripts, not only SessionEnd.** `sessions.py` scans `~/.claude/projects/*/*.jsonl`
+  modified within `lookback_days`, reads each transcript's `cwd`, and maps it to a project with `detect_project`
+  (a removed worktree maps through its nearest existing ancestor). The mapping is cached per transcript in
+  `state/transcripts.json`. A session is waiting once it ended via SessionEnd or has been idle `quiet_minutes`.
+  This covers sessions that never fired SessionEnd: still open, killed, or started before the plugin loaded.
+- **Sessions consumed** are tracked per project in `dreams/state.json` with the transcript mtime at digest time; a
+  resumed session becomes waiting again once its new activity is quiet. A failed dream consumes nothing. When more
+  than `max_sessions` are waiting, the newest are digested and the rest are deferred; while that backlog lasts the
+  schedule gap drops from `interval_hours` to one hour.
 
 ### Known gaps
 

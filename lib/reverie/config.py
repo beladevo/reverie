@@ -25,6 +25,8 @@ DEFAULTS: dict = {
         "model": "sonnet",
         "max_turns": 40,
         "max_sessions": 20,
+        "lookback_days": 7,
+        "quiet_minutes": 30,
         "digest_chars_per_session": 12000,
         "promote_min_sessions": 3,
         "auto_promote": False,
@@ -103,6 +105,10 @@ class Project:
     id: str
     root: Path
     label: str
+
+
+def in_git_repo(path: Path) -> bool:
+    return _git(path, "rev-parse", "--show-toplevel") is not None
 
 
 def detect_project(cwd: Path) -> Project:

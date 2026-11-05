@@ -39,7 +39,7 @@ def cmd_status(args) -> None:
     schedule = config["dream"]["schedule"]
     print(f"\ndreaming: mode={config['dream']['mode']} schedule={'on' if schedule['enabled'] else 'off'} "
           f"(every {schedule['interval_hours']}h, min {schedule['min_sessions']} sessions)")
-    print(f"  sessions waiting: {len(dream.unconsumed_sessions(project))}   due: {dream.is_due(project, config)}"
+    print(f"  sessions waiting: {len(dream.unconsumed_sessions(project, config))}   due: {dream.is_due(project, config)}"
           f"   pending review: {dream.pending_review(project)}")
     last = dream.load_state()["projects"].get(project.id, {}).get("last_dream_at")
     print(f"  last dream: {last or 'never'}")
