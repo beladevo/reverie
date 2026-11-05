@@ -161,6 +161,18 @@ def cmd_decide(args) -> None:
     _print_dream(dream.decide(args.dream, ops, accept=args.command == "accept"))
 
 
+def cmd_dashboard(args) -> None:
+    if args.once or not (sys.stdin.isatty() and sys.stdout.isatty()):
+        from . import dashboard
+
+        for text, _ in dashboard.overview(dashboard.take(args.cwd), 100):
+            print(text)
+        return
+    from . import tui
+
+    tui.run(args.cwd)
+
+
 def cmd_hook(args) -> None:
     sys.exit(hooks.run(args.event))
 
@@ -231,6 +243,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("dream")
         p.add_argument("--ops", help="comma-separated op ids (default: all pending)")
         p.set_defaults(fn=cmd_decide)
+
+    p = sub.add_parser("dashboard", help="live terminal dashboard: stores, files and history, dreams, sessions")
+    p.add_argument("--once", action="store_true", help="print the overview and exit")
+    p.set_defaults(fn=cmd_dashboard)
 
     p = sub.add_parser("hook", help="internal: Claude Code hook entrypoint")
     p.add_argument("event", choices=sorted(hooks.HANDLERS))

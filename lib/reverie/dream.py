@@ -79,14 +79,34 @@ def is_due(project: Project, config: dict) -> bool:
 
 
 def maybe_schedule(project: Project, config: dict, cwd: str) -> bool:
-    if not is_due(project, config) or _lock_held(project):
+    return is_due(project, config) and spawn(project, cwd, "schedule")
+
+
+def spawn(project: Project, cwd: str, trigger: str) -> bool:
+    if _lock_held(project):
         return False
     log = open(dreams_dir() / f"{project.id}.log", "a")
     subprocess.Popen(
-        [sys.executable, str(Path(__file__).parents[2] / "bin" / "reverie"), "--cwd", cwd, "dream", "--trigger", "schedule"],
+        [sys.executable, str(Path(__file__).parents[2] / "bin" / "reverie"), "--cwd", cwd, "dream", "--trigger", trigger],
         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True,
     )
     return True
+
+
+def _running_path(project: Project) -> Path:
+    return dreams_dir() / f"{project.id}.running"
+
+
+def running(project: Project) -> Optional[dict]:
+    if not _lock_held(project):
+        return None
+    path = _running_path(project)
+    dream_dir = dreams_dir() / (path.read_text().strip() if path.exists() else "-")
+    if (dream_dir / "result.json").exists():
+        return None
+    if (dream_dir / "input.json").exists():
+        return json.loads((dream_dir / "input.json").read_text())
+    return {"project": project.id}
 
 
 def _lock_path(project: Project) -> Path:
@@ -332,10 +352,11 @@ def run(cwd: Path, mode: Optional[str] = None, trigger: str = "manual") -> dict:
         config["dream"]["mode"] = mode
     attachments = [a for a in resolve_attachments(config, project) if a.store]
     with _project_lock(project):
+        dream_id = _new_dream_id()
+        atomic_write(_running_path(project), dream_id.encode())
         _mark_attempt(project)
         waiting = unconsumed_sessions(project)
         sessions = waiting[-config["dream"]["max_sessions"]:]
-        dream_id = _new_dream_id()
         dream_dir = dreams_dir() / dream_id
         (dream_dir / "digest").mkdir(parents=True)
         for att in attachments:
@@ -399,15 +420,17 @@ def load(dream_id: str) -> tuple[Path, dict]:
 
 
 def decide(dream_id: str, op_ids: Optional[list[int]], accept: bool) -> dict:
-    dream_dir, record = load(dream_id)
-    for op in record["ops"]:
-        if op["status"] != "pending" or (op_ids and op["id"] not in op_ids):
-            continue
-        if accept:
-            _apply_op(op, dream_id)
-        else:
-            op["status"] = "rejected"
-            op["problems"] = op.get("problems", []) + ["rejected by reviewer"]
-    _finish(dream_dir, record)
-    return record
+    with open(dreams_dir() / dream_id / "decide.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        dream_dir, record = load(dream_id)
+        for op in record["ops"]:
+            if op["status"] != "pending" or (op_ids and op["id"] not in op_ids):
+                continue
+            if accept:
+                _apply_op(op, dream_id)
+            else:
+                op["status"] = "rejected"
+                op["problems"] = op.get("problems", []) + ["rejected by reviewer"]
+        _finish(dream_dir, record)
+        return record
 

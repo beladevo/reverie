@@ -57,9 +57,23 @@ preference, or it learns something non-obvious. Commands:
 | `/reverie:review` | walk through proposed changes and accept/reject them |
 | `/reverie:history` | version log, view old versions, roll back a file or store |
 | `/reverie:export` | tarball with full history, or one Markdown file |
+| `/reverie:dashboard` | snapshot, plus the command for the live dashboard |
 
 The same operations are available as a CLI: `reverie --help` (on Claude's Bash `PATH` while the plugin is
 enabled, or `bin/reverie` in this repo).
+
+## Dashboard
+
+`reverie dashboard` opens a live terminal view (stdlib curses, refreshes every 2 seconds):
+
+| Tab | Shows |
+|---|---|
+| 1 Overview | stores with file and version counts, last and next dream, waiting sessions, recent changes, hook errors |
+| 2 Memory | every store as a file tree; open a file to read it, → for its version history with a diff per version |
+| 3 Dreams | each dream's summary and changes with rationale, evidence, problems and diff; `a` / `x` accepts or rejects a pending change |
+| 4 Sessions | sessions waiting to be dreamed over, and the condensed transcript the dreamer will read |
+
+`n` starts a dream in the background from any tab. `reverie dashboard --once` prints the overview and exits.
 
 ## Stores
 
