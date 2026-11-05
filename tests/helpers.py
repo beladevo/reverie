@@ -28,6 +28,7 @@ class ReverieTestCase(unittest.TestCase):
         subprocess.run(["git", "init", "-q", str(self.project)], check=True)
         self.env = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_PLUGIN_DATA", "REVERIE_DISABLE")}
         self.env["REVERIE_DATA"] = str(self.data)
+        self.env["CLAUDE_CONFIG_DIR"] = str(tmp / "claude-home")
         self._saved_env = dict(os.environ)
         os.environ.clear()
         os.environ.update(self.env)

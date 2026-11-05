@@ -73,7 +73,7 @@ enabled, or `bin/reverie` in this repo).
 | 1 Overview | stores with file and version counts, last and next dream, waiting sessions, recent changes, hook errors |
 | 2 Memory | every store as a file tree; open a file to read it, → for its version history with a diff per version |
 | 3 Dreams | each dream's summary and changes with rationale, evidence, problems and diff; `a` / `x` accepts or rejects a pending change |
-| 4 Sessions | sessions waiting to be dreamed over, and the condensed transcript the dreamer will read |
+| 4 Sessions | sessions waiting to be dreamed over from every worktree, sessions in progress, and the condensed transcript the dreamer will read |
 
 `n` starts a dream in the background from any tab. `reverie dashboard --once` prints the overview and exits.
 
@@ -120,6 +120,8 @@ A team can also share a committed, read-only policy directory:
     "model": "sonnet",
     "max_turns": 40,
     "max_sessions": 20,
+    "lookback_days": 7,
+    "quiet_minutes": 30,
     "promote_min_sessions": 3,
     "auto_promote": false,
     "timeout_minutes": 30

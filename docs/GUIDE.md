@@ -1,6 +1,6 @@
 # Reverie — Product Guide
 
-**Version:** 0.2.1  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
+**Version:** 0.3.0  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
 
 ---
 
@@ -88,7 +88,7 @@ Claude works ─► reads relevant memory files when needed
 Claude learns something ─► writes a memory file
       │                      ├─ checked first: allowed store? valid format? no secrets? up to date?
       │                      └─ saved as a new version, tagged with the session
-Session ends ─► the session is queued for the next dream
+Session quiet ─► its transcript is picked up by the next dream (any worktree of the repo)
 ```
 
 - **Loading:** at startup Claude receives the usage rules, an index of memory files (path and one-line
@@ -115,7 +115,7 @@ Dreaming is the curation step. It runs outside your working sessions and changes
 validated, evidence-backed edits.
 
 ```
-Collect     snapshot of each store + up to 20 sessions not yet reviewed
+Collect     snapshot of each store + up to 20 of the repo's sessions not yet reviewed
    │
 Condense    each session transcript reduced to requests, answers, actions and errors
    │
@@ -149,8 +149,14 @@ Apply       note changes applied automatically; policy changes queued for your r
 - Your live memory is never edited in place. Changes are applied as new versions, so the state before
   any dream can always be restored.
 - A failed dream changes nothing and doesn't immediately retry.
-- A dream reviews at most 20 waiting sessions (`dream.max_sessions`). Older waiting sessions are marked as
-  reviewed and skipped, so dream at least that often if you work in many short sessions.
+- A dream reviews at most 20 sessions (`dream.max_sessions`), newest first. The rest stay waiting, and while
+  more than 20 are waiting the next dream may start one hour later instead of 24.
+
+**Which sessions are reviewed:** every Claude Code session of the repository from the last 7 days
+(`dream.lookback_days`), in any worktree or clone, including sessions from before Reverie was installed.
+Reverie finds them in Claude Code's transcript folder (`~/.claude/projects/`) by their working directory.
+A session counts once it has ended or been quiet for 30 minutes (`dream.quiet_minutes`); a session you
+resume later is reviewed again for the new part. Only this repository's sessions are read.
 
 **When dreams run:**
 
@@ -256,7 +262,7 @@ needs its own terminal window; `/reverie:dashboard` gives you the exact command.
 | 1 Overview | Each store with file and version counts, the last dream, when the next one runs and what it is waiting for, changes awaiting review, recent memory changes, hook errors |
 | 2 Memory | Every store as a file tree. Select a file to read it; press → for its version history and the diff each version made |
 | 3 Dreams | Each dream's summary and changes, with the rationale, evidence, problems and diff of each. `a` accepts and `x` rejects a pending change |
-| 4 Sessions | Sessions waiting to be dreamed over, and the condensed transcript the dreamer will read |
+| 4 Sessions | Sessions waiting to be dreamed over (from every worktree), sessions still in progress, and the condensed transcript the dreamer will read |
 
 `n`, `a` and `x` ask for confirmation (`y`) before doing anything.
 
@@ -288,6 +294,8 @@ Settings are optional. Put them in:
 | `dream.schedule.interval_hours` | `24` | Minimum time between automatic dreams |
 | `dream.schedule.min_sessions` | `5` | Minimum new sessions before an automatic dream |
 | `dream.model` | `sonnet` | Model used for dreaming |
+| `dream.lookback_days` | `7` | How far back to look for session transcripts; `0` reviews only sessions that ended with Reverie enabled |
+| `dream.quiet_minutes` | `30` | How long a session must be idle before it is reviewed |
 | `dream.promote_min_sessions` | `3` | Distinct sessions required to support a policy rule |
 | `dream.auto_promote` | `false` | Apply policy changes without review (not recommended) |
 | `inject.max_tokens` | `2000` | Maximum memory loaded at session start |
@@ -324,7 +332,8 @@ through your normal review process, not versioned by Reverie and not edited by d
 | `stores/<store>/.rv/log.jsonl` | Version log of the store, which only ever grows |
 | `stores/<store>/.rv/objects/` | Every version of every file |
 | `dreams/<id>/` | Each dream's inputs, proposal and report |
-| `sessions.jsonl` | Sessions queued for dreaming |
+| `sessions.jsonl` | Sessions that ended with Reverie enabled |
+| `state/transcripts.json` | Which repository each transcript belongs to (a cache) |
 
 Reverie makes no network calls of its own. Memory reaches the model as part of your sessions (the index
 loaded at startup and files Claude opens), and during dreaming, which also sends condensed transcripts of
