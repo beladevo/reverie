@@ -2,6 +2,8 @@
 
 Persistent, versioned memory for Claude Code — and a background "dreaming" job that keeps it clean.
 
+New here? Read the [user guide](docs/GUIDE.md).
+
 - **Plain Markdown.** Memory is a directory of small Markdown files. Claude reads and writes them with its
   normal tools; you can open them in any editor.
 - **Every write is a version.** Each change is stored content-addressed with who made it (session, tool,
