@@ -79,14 +79,30 @@ def is_due(project: Project, config: dict) -> bool:
 
 
 def maybe_schedule(project: Project, config: dict, cwd: str) -> bool:
-    if not is_due(project, config) or _lock_held(project):
+    return is_due(project, config) and spawn(project, cwd, "schedule")
+
+
+def spawn(project: Project, cwd: str, trigger: str) -> bool:
+    if _lock_held(project):
         return False
     log = open(dreams_dir() / f"{project.id}.log", "a")
     subprocess.Popen(
-        [sys.executable, str(Path(__file__).parents[2] / "bin" / "reverie"), "--cwd", cwd, "dream", "--trigger", "schedule"],
+        [sys.executable, str(Path(__file__).parents[2] / "bin" / "reverie"), "--cwd", cwd, "dream", "--trigger", trigger],
         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True, close_fds=True,
     )
     return True
+
+
+def running(project: Project) -> Optional[dict]:
+    if not _lock_held(project):
+        return None
+    for path in sorted(dreams_dir().glob("*/input.json"), reverse=True):
+        if (path.parent / "result.json").exists():
+            continue
+        record = json.loads(path.read_text())
+        if record.get("project") == project.id:
+            return record
+    return {"project": project.id}
 
 
 def _lock_path(project: Project) -> Path:
