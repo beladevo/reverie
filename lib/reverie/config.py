@@ -52,12 +52,15 @@ def data_root() -> Path:
 
 
 def plugin_data_dir(source: Path) -> Optional[Path]:
-    """An installed plugin runs from plugins/cache/<marketplace>/<plugin>/<version>/; its data is plugins/data/<plugin>-<marketplace>."""
-    try:
-        marketplace, plugin = source.resolve().relative_to((claude_home() / "plugins" / "cache").resolve()).parts[:2]
-    except ValueError:
-        return None
-    return claude_home() / "plugins" / "data" / f"{plugin}-{marketplace}"
+    """Installed plugins run from <plugins>/cache/<marketplace>/<plugin>/<version>/; Claude Code keeps their data
+    in <plugins>/data/<plugin@marketplace with other characters as "-">, wherever <plugins> is configured."""
+    source = source.resolve()
+    for cache in source.parents:
+        parts = source.relative_to(cache).parts
+        if cache.name == "cache" and len(parts) >= 4:
+            marketplace, plugin = parts[:2]
+            return cache.parent / "data" / re.sub(r"[^A-Za-z0-9_-]", "-", f"{plugin}@{marketplace}")
+    return None
 
 
 def _last_session_at(directory: Path) -> float:
@@ -67,7 +70,7 @@ def _last_session_at(directory: Path) -> float:
 
 def _most_active_data_dir() -> Path:
     installed = sorted((claude_home() / "plugins" / "data").glob("reverie-*"))
-    return max(installed, key=_last_session_at) if installed else claude_home() / "reverie-data"
+    return max(installed, key=lambda d: (_last_session_at(d), not d.name.endswith("-inline"))) if installed else claude_home() / "reverie-data"
 
 
 def deep_merge(base: dict, override: dict) -> dict:

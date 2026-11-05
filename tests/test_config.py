@@ -29,6 +29,15 @@ class DataRootTest(unittest.TestCase):
         self.assertEqual(config.plugin_data_dir(source), self.data / "reverie-reverie")
         self.assertIsNone(config.plugin_data_dir(Path("/elsewhere/lib/reverie/config.py")))
 
+    def test_custom_plugin_root_and_marketplace_names(self):
+        source = self.home / "opt" / "cache" / "beladevo.tools" / "reverie" / "0.2.1" / "lib" / "reverie" / "config.py"
+        self.assertEqual(config.plugin_data_dir(source), self.home / "opt" / "data" / "reverie-beladevo-tools")
+
+    def test_checkout_without_sessions_avoids_the_inline_dir(self):
+        for name in ("reverie-inline", "reverie-reverie"):
+            (self.data / name).mkdir(parents=True)
+        self.assertEqual(config.data_root(), self.data / "reverie-reverie")
+
     def test_checkout_picks_the_dir_with_the_latest_session(self):
         for name in ("reverie-inline", "reverie-reverie"):
             (self.data / name).mkdir(parents=True)

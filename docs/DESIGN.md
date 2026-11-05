@@ -414,7 +414,7 @@ Where the shipped code differs from the plan above, and why:
   `~/.claude/projects/*/memory/` to the Reverie stores (`redirect_builtin_memory`). Verified live: before
   this, sessions saved preferences to the built-in memory and Reverie never saw them.
 - **Data dir discovery.** Hooks get `CLAUDE_PLUGIN_DATA`; Bash-tool runs of `bin/reverie` don't, so the
-  CLI finds `~/.claude/plugins/data/reverie-*` by name. `REVERIE_DATA` overrides both.
+  CLI works out the same dir from where its code is installed (`<plugins>/cache/<marketplace>/<plugin>/…` → `<plugins>/data/<plugin>-<marketplace>`), or, run from a checkout, takes the `reverie-*` dir with the latest session. `REVERIE_DATA` overrides both.
 - **Child run isolation.** The dreamer runs `claude -p` in the dream directory with
   `--permission-mode acceptEdits`, an allowlist of file tools, Bash/Web/Agent disallowed, and
   `REVERIE_DISABLE=1` + `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` so it neither triggers Reverie hooks nor writes
