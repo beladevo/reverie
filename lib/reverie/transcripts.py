@@ -65,6 +65,12 @@ def _before(entry: dict, since: Optional[float]) -> bool:
         return False
 
 
+def is_substantive(digest: str) -> bool:
+    """A session worth a dreamer's time has the user asking something and the assistant acting on it."""
+    lines = digest.splitlines()
+    return any(l.startswith("USER: ") for l in lines) and any(l.startswith(("ASSISTANT: ", "[tool ")) for l in lines)
+
+
 def condense(transcript: Path, max_chars: int, since: Optional[float] = None) -> str:
     """Reduce a session transcript to what a reviewer needs: what was asked, said, tried, and what failed."""
     lines: list[str] = []

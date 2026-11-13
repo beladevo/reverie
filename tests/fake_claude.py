@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 
 assert os.environ.get("REVERIE_DISABLE") == "1", "dreamer must run with Reverie hooks disabled"
+assert not Path.cwd().resolve().is_relative_to(Path(os.environ["REVERIE_DATA"]).resolve()), \
+    "dreamer must run outside the data dir: Claude Code refuses unattended writes under ~/.claude"
 
 notes = Path("proposal/project.notes")
 policy = Path("proposal/project.policy")

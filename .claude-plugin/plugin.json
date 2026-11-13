@@ -1,6 +1,6 @@
 {
   "name": "reverie",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Versioned Markdown memory across sessions, curated by a background dreaming job.",
   "author": { "name": "Omri Beladev", "url": "https://github.com/beladevo" },
   "homepage": "https://github.com/beladevo/reverie",

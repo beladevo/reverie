@@ -1,6 +1,6 @@
 # Reverie — Product Guide
 
-**Version:** 0.3.0  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
+**Version:** 0.4.0  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
 
 ---
 
@@ -148,9 +148,16 @@ Apply       note changes applied automatically; policy changes queued for your r
   web, MCP servers or other plugins.
 - Your live memory is never edited in place. Changes are applied as new versions, so the state before
   any dream can always be restored.
-- A failed dream changes nothing and doesn't immediately retry.
+- A failed dream changes nothing. It is retried an hour later, up to 3 times in a row, then waits the normal
+  24 hours. A dream also counts as failed when the dreamer reports an error (such as an expired login) or
+  any of its tool calls was refused, and its report says why.
+- The dreamer works in a temporary folder outside `~/.claude`, because Claude Code refuses unattended writes
+  inside its own config folder. Its proposal is copied back into the dream's folder afterwards.
 - A dream reviews at most 20 sessions (`dream.max_sessions`), newest first. The rest stay waiting, and while
   more than 20 are waiting the next dream may start one hour later instead of 24.
+- Sessions with nothing to learn from (a missing transcript, or no assistant reply, such as a lone `/model`)
+  take no slot. They are marked reviewed without being sent to the dreamer. If only such sessions are
+  waiting, the dream ends without starting the dreamer.
 
 **Which sessions are reviewed:** every Claude Code session of the repository from the last 7 days
 (`dream.lookback_days`), in any worktree or clone, including sessions from before Reverie was installed.
@@ -161,7 +168,7 @@ resume later is reviewed again, for the part after the last dream only. Only thi
 **When dreams run:**
 
 - **Automatically:** when a new session starts (not on resume), once 24 hours have passed since the last
-  dream or failed attempt *and* at least 5 sessions are waiting. The dream runs in the background and does not slow the session down.
+  dream (or an hour after a failed one, see above) *and* at least 5 sessions are waiting. The dream runs in the background and does not slow the session down.
 - **On demand:** with `/reverie:dream`, or `n` in the dashboard.
 
 A dream that has already started finishes even if you disable the plugin meanwhile.

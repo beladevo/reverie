@@ -6,8 +6,10 @@ import fcntl
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -16,7 +18,7 @@ from .config import Project, data_root, detect_project, load_config
 from .runtime import Attachment, resolve_attachments, stores_dir
 from .store import Actor, ConflictError, Store, atomic_write, hash_file, now_iso
 from .sessions import inventory, recorded
-from .transcripts import condense
+from .transcripts import condense, is_substantive
 from .validate import parse_frontmatter, validate_memory
 
 PROMPT_FILE = Path(__file__).parent / "prompts" / "dreamer.md"
@@ -25,6 +27,7 @@ DREAM_ALLOWED = ["Read(./**)", "Edit(./**)"]
 DREAM_DISALLOWED = ["Bash", "WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit"]
 MIN_EVIDENCE_PREFIX = 8
 BACKLOG_GAP = timedelta(hours=1)
+FAILURE_RETRIES = 3
 
 
 def dreams_dir() -> Path:
@@ -60,9 +63,12 @@ def unconsumed_sessions(project: Project, config: dict) -> list[dict]:
 
 
 def dream_gap(project_state: dict, config: dict, waiting: int) -> timedelta:
-    """A backlog larger than one dream can take is worked off hourly, unless the last attempt failed."""
+    """A backlog larger than one dream can take is worked off hourly. A failure (an expired login, a refused write)
+    is retried hourly a few times, then falls back to the normal interval so a persistent fault doesn't burn money."""
     succeeded = (project_state.get("last_dream_at") or "") >= (project_state.get("last_attempt_at") or "")
     if waiting > config["dream"]["max_sessions"] and succeeded:
+        return BACKLOG_GAP
+    if 0 < project_state.get("failures", 0) <= FAILURE_RETRIES:
         return BACKLOG_GAP
     return timedelta(hours=config["dream"]["schedule"]["interval_hours"])
 
@@ -162,7 +168,7 @@ def _write_task(dream_dir: Path, attachments: list[Attachment], sessions: list[d
     (dream_dir / "TASK.md").write_text("\n".join(lines))
 
 
-def _run_dreamer(dream_dir: Path, config: dict) -> subprocess.CompletedProcess:
+def _run_dreamer(workspace: Path, config: dict) -> subprocess.CompletedProcess:
     claude = os.environ.get("REVERIE_CLAUDE_BIN", "claude")
     prompt = PROMPT_FILE.read_text() + "\n\nStart now: read TASK.md."
     cmd = [claude, "-p", prompt,
@@ -176,12 +182,39 @@ def _run_dreamer(dream_dir: Path, config: dict) -> subprocess.CompletedProcess:
            "--output-format", "json"]
     env = {**os.environ, "REVERIE_DISABLE": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
     try:
-        return subprocess.run(cmd, cwd=dream_dir, env=env, capture_output=True, text=True,
+        return subprocess.run(cmd, cwd=workspace, env=env, capture_output=True, text=True,
                               timeout=config["dream"]["timeout_minutes"] * 60, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as e:
         return subprocess.CompletedProcess(cmd, 124, _as_text(e.stdout), f"timed out after {config['dream']['timeout_minutes']}m")
     except OSError as e:
         return subprocess.CompletedProcess(cmd, 127, "", f"could not start {claude}: {e}")
+
+
+def _dreamer_result(stdout: str) -> dict:
+    """The final `result` event of `claude -p --output-format json`, which is one object or a list of events."""
+    candidates = []
+    try:
+        data = json.loads(stdout)
+        candidates = data if isinstance(data, list) else [data]
+    except json.JSONDecodeError:
+        for line in stdout.splitlines():
+            try:
+                candidates.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    results = [c for c in candidates if isinstance(c, dict) and c.get("type") == "result"]
+    return results[-1] if results else {}
+
+
+def _dreamer_failure(result: subprocess.CompletedProcess, outcome: dict) -> Optional[str]:
+    if result.returncode != 0:
+        return f"dreamer exited {result.returncode}"
+    if outcome.get("is_error"):
+        return f"dreamer error: {outcome.get('result') or outcome.get('terminal_reason') or 'unknown'}"
+    denied = sorted({d.get("tool_name", "?") for d in outcome.get("permission_denials") or []})
+    if denied:
+        return f"dreamer was refused {len(outcome['permission_denials'])} tool call(s): {', '.join(denied)}"
+    return None
 
 
 def _as_text(value) -> str:
@@ -250,11 +283,13 @@ def _historic_sessions() -> set[str]:
     return ids
 
 
-def _diff_ops(dream_dir: Path, attachments: list[Attachment], session_ids: set[str], config: dict) -> tuple[list[dict], str]:
+def _diff_ops(dream_dir: Path, attachments: list[Attachment], base: dict, session_ids: set[str],
+              config: dict) -> tuple[list[dict], str]:
+    """Diffs against the stores as the dreamer saw them, so a session writing mid-dream isn't read as a delete."""
     index, summary = _rationale_index(dream_dir)
     ops = []
     for att in attachments:
-        base_state = att.store.state()
+        base_state = att.store.state(at_seq=base[att.name]["seq"])
         proposal_root = dream_dir / "proposal" / att.name
         proposed = {p.relative_to(proposal_root).as_posix(): p for p in proposal_root.rglob("*") if p.is_file()} if proposal_root.exists() else {}
         for rel in sorted(set(base_state) | set(proposed)):
@@ -318,8 +353,11 @@ def _apply_op(op: dict, dream_id: str) -> None:
         op["problems"] = ["memory changed after the dream started; re-dream to reconsider"]
 
 
-def _render_report(dream_id: str, summary: str, ops: list[dict]) -> str:
-    out = [f"# Dream {dream_id}", "", summary or "_(no summary)_", ""]
+def _render_report(dream_id: str, summary: str, ops: list[dict], error: str = "") -> str:
+    out = [f"# Dream {dream_id}", ""]
+    if error:
+        out += [f"**Failed:** {error}", ""]
+    out += [summary or "_(no summary)_", ""]
     for op in ops:
         out.append(f"## #{op['id']} {op['op']} `{op['store']}/{op['path']}` — {op['status']}")
         if op["rationale"]:
@@ -347,6 +385,42 @@ def _finish(dream_dir: Path, record: dict) -> None:
     atomic_write(dream_dir / "REPORT.md", _render_report(record["id"], record.get("summary", ""), record["ops"]).encode())
 
 
+def _fail(dream_dir: Path, record: dict, error: str, summary: str) -> dict:
+    record.update(status="failed", ops=[], error=error, summary=summary, finished_at=now_iso())
+    atomic_write(dream_dir / "result.json", (json.dumps(record, indent=2) + "\n").encode())
+    atomic_write(dream_dir / "REPORT.md", _render_report(record["id"], summary, [], error).encode())
+    _record_outcome(record, [], failed=True)
+    return record
+
+
+def _pick_sessions(waiting: list[dict], config: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """(reviewed, deferred, trivial). Sessions with nothing to learn from — a missing transcript, a lone /model —
+    take no slot and are consumed unread, so they neither pad a dream nor keep the backlog loop running."""
+    reviewed, trivial = [], []
+    for s in reversed(waiting):
+        if len(reviewed) == config["dream"]["max_sessions"]:
+            break
+        s["digest"] = condense(Path(s.get("transcript_path") or ""), config["dream"]["digest_chars_per_session"],
+                               since=s.get("reviewed_until"))
+        (reviewed if is_substantive(s["digest"]) else trivial).append(s)
+    picked = {id(s) for s in reviewed + trivial}
+    deferred = [s for s in waiting if id(s) not in picked]
+    return list(reversed(reviewed)), deferred, trivial
+
+
+def _record_outcome(record: dict, consumed: list[dict], failed: bool) -> None:
+    state = load_state()
+    project_state = state["projects"].setdefault(record["project"], {"consumed": []})
+    project_state["consumed"] = sorted(set(project_state["consumed"]) | {s["session_id"] for s in consumed})
+    project_state.setdefault("consumed_mtime", {}).update({s["session_id"]: s["mtime"] for s in consumed if s.get("mtime")})
+    if failed:
+        project_state["failures"] = project_state.get("failures", 0) + 1
+    else:
+        project_state["failures"] = 0
+        project_state["last_dream_at"] = now_iso()
+    _save_state(state)
+
+
 def run(cwd: Path, mode: Optional[str] = None, trigger: str = "manual") -> dict:
     project = detect_project(cwd)
     config, _ = load_config(project)
@@ -358,50 +432,61 @@ def run(cwd: Path, mode: Optional[str] = None, trigger: str = "manual") -> dict:
         atomic_write(_running_path(project), dream_id.encode())
         _mark_attempt(project)
         waiting = unconsumed_sessions(project, config)
-        sessions = waiting[-config["dream"]["max_sessions"]:]
-        dream_dir = dreams_dir() / dream_id
-        (dream_dir / "digest").mkdir(parents=True)
-        for att in attachments:
-            (dream_dir / "proposal" / att.name).mkdir(parents=True)
-            att.store.sync_external(Actor(kind="external", tool="external-edit"))
-            att.store.materialize(dream_dir / "proposal" / att.name)
         for s in waiting:
             transcript = Path(s.get("transcript_path") or "")
             s["mtime"] = transcript.stat().st_mtime if transcript.is_file() else None
-        for s in sessions:
-            digest = condense(Path(s.get("transcript_path") or ""), config["dream"]["digest_chars_per_session"],
-                              since=s.get("reviewed_until"))
-            if digest and s.get("reviewed_until"):
-                digest = "(resumed session: only activity since the last dream is shown)\n\n" + digest
-            (dream_dir / "digest" / f"{s['session_id']}.md").write_text(digest or "(transcript unavailable)")
+        sessions, deferred, trivial = _pick_sessions(waiting, config)
+        dream_dir = dreams_dir() / dream_id
+        dream_dir.mkdir(parents=True)
+        for att in attachments:
+            att.store.sync_external(Actor(kind="external", tool="external-edit"))
         record = {"id": dream_id, "project": project.id, "trigger": trigger, "mode": config["dream"]["mode"],
                   "cwd": str(cwd), "started_at": now_iso(), "sessions": [s["session_id"] for s in sessions],
-                  "deferred_sessions": [s["session_id"] for s in waiting if s not in sessions],
+                  "deferred_sessions": [s["session_id"] for s in deferred],
+                  "skipped_sessions": [s["session_id"] for s in trivial],
                   "base": {a.name: {"store_id": a.store.root.name, "seq": a.store.head_seq()} for a in attachments}}
         atomic_write(dream_dir / "input.json", (json.dumps(record, indent=2) + "\n").encode())
-        _write_task(dream_dir, attachments, sessions, config)
 
-        result = _run_dreamer(dream_dir, config)
-        (dream_dir / "dreamer.out").write_text(result.stdout + ("\n--- stderr ---\n" + result.stderr if result.stderr else ""))
-        if result.returncode != 0:
-            record.update(status="failed", ops=[], error=f"dreamer exited {result.returncode}")
-            atomic_write(dream_dir / "result.json", (json.dumps(record, indent=2) + "\n").encode())
+        if not sessions:
+            record.update(status="no_changes", ops=[], summary="No session had anything to review.", finished_at=now_iso())
+            _finish(dream_dir, record)
+            _record_outcome(record, trivial, failed=False)
             return record
 
-        ops, summary = _diff_ops(dream_dir, attachments, set(record["sessions"]), config)
+        # Claude Code refuses unattended writes under its own config dir, where the plugin data lives.
+        with tempfile.TemporaryDirectory(prefix="reverie-dream-") as tmp:
+            workspace = Path(tmp)
+            (workspace / "digest").mkdir()
+            for att in attachments:
+                (workspace / "proposal" / att.name).mkdir(parents=True)
+                att.store.materialize(workspace / "proposal" / att.name, at_seq=record["base"][att.name]["seq"])
+            for s in sessions:
+                digest = s["digest"]
+                if s.get("reviewed_until"):
+                    digest = "(resumed session: only activity since the last dream is shown)\n\n" + digest
+                (workspace / "digest" / f"{s['session_id']}.md").write_text(digest)
+            _write_task(workspace, attachments, sessions, config)
+
+            result = _run_dreamer(workspace, config)
+            for name in ("TASK.md", "digest", "proposal", "changes.json"):
+                source = workspace / name
+                if source.is_dir():
+                    shutil.copytree(source, dream_dir / name)
+                elif source.exists():
+                    shutil.copy2(source, dream_dir / name)
+        (dream_dir / "dreamer.out").write_text(result.stdout + ("\n--- stderr ---\n" + result.stderr if result.stderr else ""))
+        outcome = _dreamer_result(result.stdout)
+        error = _dreamer_failure(result, outcome)
+        if error:
+            return _fail(dream_dir, record, error, str(outcome.get("result") or ""))
+
+        ops, summary = _diff_ops(dream_dir, attachments, record["base"], set(record["sessions"]), config)
         for op in ops:
             if op["status"] == "accepted":
                 _apply_op(op, dream_id)
-        record.update(ops=ops, summary=summary, finished_at=now_iso())
+        record.update(ops=ops, summary=summary or str(outcome.get("result") or ""), finished_at=now_iso())
         _finish(dream_dir, record)
-
-        state = load_state()
-        project_state = state["projects"].setdefault(project.id, {"consumed": []})
-        project_state["consumed"] = sorted(set(project_state["consumed"]) | set(record["sessions"]))
-        consumed_mtime = project_state.setdefault("consumed_mtime", {})
-        consumed_mtime.update({s["session_id"]: s["mtime"] for s in sessions if s.get("mtime")})
-        project_state["last_dream_at"] = now_iso()
-        _save_state(state)
+        _record_outcome(record, sessions + trivial, failed=False)
         return record
 
 
