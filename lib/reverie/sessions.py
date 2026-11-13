@@ -10,6 +10,7 @@ from .config import claude_home, data_root, detect_project, in_git_repo
 from .store import atomic_write
 
 HEAD_LINES = 50
+DREAM_WORKSPACE_PREFIX = "reverie-dream-"
 SAVE_EVERY = 25
 
 
@@ -50,7 +51,7 @@ def _project_of(cwd: str) -> Optional[str]:
     """A removed worktree inside a repo maps through its nearest surviving ancestor, but only if that ancestor is
     in a git repo: a removed directory outside any repo must not fall through to whatever folder contained it."""
     path = Path(cwd).resolve()
-    if path.is_relative_to(data_root().resolve()):
+    if path.is_relative_to(data_root().resolve()) or path.name.startswith(DREAM_WORKSPACE_PREFIX):
         return None
     if path.exists():
         return detect_project(path).id

@@ -160,6 +160,102 @@ Path("changes.json").write_text(json.dumps({"changes": [
         self.assertIn("due: False", self.cli("status").stdout, "a failed attempt must not retry on every session start")
         self.assertIn("sessions waiting: 3", self.cli("status").stdout)
 
+    def fake_result(self, name: str, result: dict) -> None:
+        script = ROOT / "tests" / f"fake_claude_{name}.py"
+        script.write_text(f"#!/usr/bin/env python3\nprint({json.dumps(json.dumps(result))})\n")
+        script.chmod(0o755)
+        self.addCleanup(script.unlink)
+        self.env["REVERIE_CLAUDE_BIN"] = str(script)
+
+    def add_session(self, sid: str, transcript: Path) -> None:
+        self.hook("session-end", session=sid, transcript_path=str(transcript))
+
+    def test_refused_writes_fail_the_dream_and_keep_sessions_waiting(self):
+        self.fake_result("denied", {"type": "result", "result": "Both Write calls were denied.",
+                                    "permission_denials": [{"tool_name": "Write", "tool_input": {}}]})
+        record = self.dream()
+        self.assertEqual(record["status"], "failed")
+        self.assertIn("refused 1 write(s): Write", record["error"])
+        report = (self.data / "dreams" / record["id"] / "REPORT.md").read_text()
+        self.assertIn("**Failed:**", report)
+        self.assertIn("Both Write calls were denied.", report)
+        self.assertIn("sessions waiting: 3", self.cli("status").stdout)
+
+    def test_dreamer_error_result_fails_the_dream(self):
+        self.fake_result("autherr", {"type": "result", "is_error": True, "result": "OAuth session expired"})
+        record = self.dream()
+        self.assertEqual(record["status"], "failed")
+        self.assertIn("OAuth session expired", record["error"])
+
+    def test_failures_retry_hourly_then_back_off(self):
+        from datetime import timedelta
+        from reverie.config import detect_project, load_config
+        from reverie.dream import dream_gap
+        config, _ = load_config(detect_project(self.project))
+        failed = {"last_dream_at": "2026-01-01T00:00:00Z", "last_attempt_at": "2026-01-02T00:00:00Z"}
+        self.assertEqual(dream_gap({**failed, "failures": 1}, config, 5), timedelta(hours=1))
+        self.assertEqual(dream_gap({**failed, "failures": 4}, config, 5), timedelta(hours=24))
+
+    def test_trivial_sessions_are_consumed_without_a_slot(self):
+        lone_command = self.data.parent / "lone-command.jsonl"
+        lone_command.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "/model"}}))
+        self.add_session("s-ddd", lone_command)
+        self.add_session("s-eee", self.data.parent / "missing.jsonl")
+        record = self.dream()
+        self.assertEqual(record["sessions"], ["s-aaa", "s-bbb", "s-ccc"])
+        self.assertEqual(sorted(record["skipped_sessions"]), ["s-ddd", "s-eee"])
+        self.assertNotIn("s-ddd.md", [p.name for p in (self.data / "dreams" / record["id"] / "digest").iterdir()])
+        self.assertIn("sessions waiting: 0", self.cli("status").stdout)
+
+    def test_only_trivial_sessions_skip_the_dreamer(self):
+        self.dream()
+        lone_command = self.data.parent / "lone-command.jsonl"
+        lone_command.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "/model"}}))
+        self.add_session("s-ddd", lone_command)
+        self.env["REVERIE_CLAUDE_BIN"] = "false"
+        record = self.dream("--trigger", "schedule")
+        self.assertEqual(record["status"], "no_changes")
+        self.assertEqual(record["skipped_sessions"], ["s-ddd"])
+
+    def test_manual_dream_with_nothing_waiting_still_curates(self):
+        self.dream()
+        self.env["REVERIE_CLAUDE_BIN"] = "false"
+        self.assertEqual(self.dream()["status"], "failed", "the dreamer ran")
+
+    def test_user_correction_without_reply_is_reviewed(self):
+        from reverie.transcripts import is_substantive
+        self.assertTrue(is_substantive("USER: always use pnpm, never npm"))
+        self.assertTrue(is_substantive("USER: /omri-code-review 12\n[tool Bash] gh pr view 12"))
+        self.assertFalse(is_substantive("USER: /model"))
+        self.assertFalse(is_substantive(""))
+
+    def test_refused_read_with_a_written_proposal_still_applies(self):
+        script = ROOT / "tests" / "fake_claude_readdenied.py"
+        script.write_text(FAKE_CLAUDE.read_text().replace(
+            'print(json.dumps({"type": "result", "result": "done"}))',
+            'print(json.dumps({"type": "result", "is_error": True, "result": "max turns", '
+            '"permission_denials": [{"tool_name": "Read", "tool_input": {"file_path": "/repo/x.ts"}}]}))'))
+        script.chmod(0o755)
+        self.addCleanup(script.unlink)
+        self.env["REVERIE_CLAUDE_BIN"] = str(script)
+        record = self.dream()
+        self.assertEqual(self.ops(record)[("project.notes", "testing/vitest-mocks.md")]["status"], "applied")
+        self.assertIn("refused Read", (self.data / "dreams" / record["id"] / "REPORT.md").read_text())
+
+    def test_dreamer_workspace_transcripts_map_to_no_project(self):
+        from reverie.sessions import _project_of
+        self.assertIsNone(_project_of(str(self.data.parent / "reverie-dream-abc123")))
+
+    def test_memory_written_mid_dream_is_not_proposed_for_deletion(self):
+        midwrite = ROOT / "tests" / "fake_claude_midwrite.py"
+        midwrite.chmod(0o755)
+        self.env["REVERIE_CLAUDE_BIN"] = str(midwrite)
+        self.env["TEST_PROJECT"] = str(self.project)
+        record = self.dream()
+        self.assertEqual(record["ops"], [])
+        self.assertEqual(record["status"], "no_changes")
+        self.assertIn("written mid-dream", self.cli("show", "project.notes", "fresh.md").stdout)
+
     def test_failed_dreamer_changes_nothing(self):
         self.env["REVERIE_CLAUDE_BIN"] = "false"
         out = self.cli("dream").stdout
