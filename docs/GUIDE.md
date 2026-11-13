@@ -155,9 +155,11 @@ Apply       note changes applied automatically; policy changes queued for your r
   inside its own config folder. Its proposal is copied back into the dream's folder afterwards.
 - A dream reviews at most 20 sessions (`dream.max_sessions`), newest first. The rest stay waiting, and while
   more than 20 are waiting the next dream may start one hour later instead of 24.
-- Sessions with nothing to learn from (a missing transcript, or no assistant reply, such as a lone `/model`)
-  take no slot. They are marked reviewed without being sent to the dreamer. If only such sessions are
-  waiting, the dream ends without starting the dreamer.
+- Sessions with nothing to learn from (a missing transcript, or only a slash command nobody acted on, such as
+  a lone `/model`) take no slot. They are marked reviewed without being sent to the dreamer. If only such
+  sessions are waiting, a scheduled dream ends without starting the dreamer; `/reverie:dream` still runs it,
+  to clean up existing memory.
+- A refused write fails the dream. A refused read (say, of a repo file) is listed as a warning in the report.
 
 **Which sessions are reviewed:** every Claude Code session of the repository from the last 7 days
 (`dream.lookback_days`), in any worktree or clone, including sessions from before Reverie was installed.

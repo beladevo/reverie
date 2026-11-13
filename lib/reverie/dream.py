@@ -17,7 +17,7 @@ from typing import Optional
 from .config import Project, data_root, detect_project, load_config
 from .runtime import Attachment, resolve_attachments, stores_dir
 from .store import Actor, ConflictError, Store, atomic_write, hash_file, now_iso
-from .sessions import inventory, recorded
+from .sessions import DREAM_WORKSPACE_PREFIX, inventory, recorded
 from .transcripts import condense, is_substantive
 from .validate import parse_frontmatter, validate_memory
 
@@ -25,6 +25,7 @@ PROMPT_FILE = Path(__file__).parent / "prompts" / "dreamer.md"
 # dontAsk denies anything not allowed here. Read(./**) also scopes Glob and Grep; Edit(./**) covers Write.
 DREAM_ALLOWED = ["Read(./**)", "Edit(./**)"]
 DREAM_DISALLOWED = ["Bash", "WebFetch", "WebSearch", "Task", "Agent", "NotebookEdit"]
+WRITE_TOOLS = {"Edit", "Write", "MultiEdit"}
 MIN_EVIDENCE_PREFIX = 8
 BACKLOG_GAP = timedelta(hours=1)
 FAILURE_RETRIES = 3
@@ -206,15 +207,25 @@ def _dreamer_result(stdout: str) -> dict:
     return results[-1] if results else {}
 
 
-def _dreamer_failure(result: subprocess.CompletedProcess, outcome: dict) -> Optional[str]:
-    if result.returncode != 0:
-        return f"dreamer exited {result.returncode}"
+def _dreamer_failure(result: subprocess.CompletedProcess, outcome: dict, wrote_changes: bool) -> Optional[str]:
+    """A refused write always fails the dream: its proposal is incomplete. Anything else (an error result, a
+    non-zero exit such as max turns) fails it only if the dreamer never got as far as writing changes.json."""
+    refused_writes = [d for d in outcome.get("permission_denials") or [] if d.get("tool_name") in WRITE_TOOLS]
+    if refused_writes:
+        tools = ", ".join(sorted({d["tool_name"] for d in refused_writes}))
+        return f"dreamer was refused {len(refused_writes)} write(s): {tools}"
+    if wrote_changes:
+        return None
     if outcome.get("is_error"):
         return f"dreamer error: {outcome.get('result') or outcome.get('terminal_reason') or 'unknown'}"
-    denied = sorted({d.get("tool_name", "?") for d in outcome.get("permission_denials") or []})
-    if denied:
-        return f"dreamer was refused {len(outcome['permission_denials'])} tool call(s): {', '.join(denied)}"
+    if result.returncode != 0:
+        return f"dreamer exited {result.returncode}"
     return None
+
+
+def _refused_reads(outcome: dict) -> list[str]:
+    return [f"refused {d.get('tool_name', '?')}: {json.dumps(d.get('tool_input') or {})[:160]}"
+            for d in outcome.get("permission_denials") or [] if d.get("tool_name") not in WRITE_TOOLS]
 
 
 def _as_text(value) -> str:
@@ -353,11 +364,14 @@ def _apply_op(op: dict, dream_id: str) -> None:
         op["problems"] = ["memory changed after the dream started; re-dream to reconsider"]
 
 
-def _render_report(dream_id: str, summary: str, ops: list[dict], error: str = "") -> str:
+def _render_report(dream_id: str, summary: str, ops: list[dict], error: str = "", warnings: tuple = ()) -> str:
     out = [f"# Dream {dream_id}", ""]
     if error:
         out += [f"**Failed:** {error}", ""]
-    out += [summary or "_(no summary)_", ""]
+    if summary or not error:
+        out += [summary or "_(no summary)_", ""]
+    if warnings:
+        out += ["Warnings:", *(f"- {w}" for w in warnings), ""]
     for op in ops:
         out.append(f"## #{op['id']} {op['op']} `{op['store']}/{op['path']}` — {op['status']}")
         if op["rationale"]:
@@ -382,13 +396,14 @@ def _finish(dream_dir: Path, record: dict) -> None:
     else:
         record["status"] = "applied" if applied else "no_changes" if not record["ops"] else "rejected"
     atomic_write(dream_dir / "result.json", (json.dumps(record, indent=2) + "\n").encode())
-    atomic_write(dream_dir / "REPORT.md", _render_report(record["id"], record.get("summary", ""), record["ops"]).encode())
+    atomic_write(dream_dir / "REPORT.md", _render_report(record["id"], record.get("summary", ""), record["ops"],
+                                                         warnings=record.get("warnings", ())).encode())
 
 
 def _fail(dream_dir: Path, record: dict, error: str, summary: str) -> dict:
     record.update(status="failed", ops=[], error=error, summary=summary, finished_at=now_iso())
     atomic_write(dream_dir / "result.json", (json.dumps(record, indent=2) + "\n").encode())
-    atomic_write(dream_dir / "REPORT.md", _render_report(record["id"], summary, [], error).encode())
+    atomic_write(dream_dir / "REPORT.md", _render_report(record["id"], summary, [], error, record.get("warnings", ())).encode())
     _record_outcome(record, [], failed=True)
     return record
 
@@ -447,14 +462,14 @@ def run(cwd: Path, mode: Optional[str] = None, trigger: str = "manual") -> dict:
                   "base": {a.name: {"store_id": a.store.root.name, "seq": a.store.head_seq()} for a in attachments}}
         atomic_write(dream_dir / "input.json", (json.dumps(record, indent=2) + "\n").encode())
 
-        if not sessions:
+        if not sessions and trigger == "schedule":
             record.update(status="no_changes", ops=[], summary="No session had anything to review.", finished_at=now_iso())
             _finish(dream_dir, record)
             _record_outcome(record, trivial, failed=False)
             return record
 
         # Claude Code refuses unattended writes under its own config dir, where the plugin data lives.
-        with tempfile.TemporaryDirectory(prefix="reverie-dream-") as tmp:
+        with tempfile.TemporaryDirectory(prefix=DREAM_WORKSPACE_PREFIX) as tmp:
             workspace = Path(tmp)
             (workspace / "digest").mkdir()
             for att in attachments:
@@ -476,9 +491,11 @@ def run(cwd: Path, mode: Optional[str] = None, trigger: str = "manual") -> dict:
                     shutil.copy2(source, dream_dir / name)
         (dream_dir / "dreamer.out").write_text(result.stdout + ("\n--- stderr ---\n" + result.stderr if result.stderr else ""))
         outcome = _dreamer_result(result.stdout)
-        error = _dreamer_failure(result, outcome)
+        record["warnings"] = _refused_reads(outcome)
+        error = _dreamer_failure(result, outcome, (dream_dir / "changes.json").exists())
         if error:
-            return _fail(dream_dir, record, error, str(outcome.get("result") or ""))
+            final_message = str(outcome.get("result") or "")
+            return _fail(dream_dir, record, error, "" if final_message and final_message in error else final_message)
 
         ops, summary = _diff_ops(dream_dir, attachments, record["base"], set(record["sessions"]), config)
         for op in ops:

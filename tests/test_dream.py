@@ -175,7 +175,7 @@ Path("changes.json").write_text(json.dumps({"changes": [
                                     "permission_denials": [{"tool_name": "Write", "tool_input": {}}]})
         record = self.dream()
         self.assertEqual(record["status"], "failed")
-        self.assertIn("refused 1 tool call(s): Write", record["error"])
+        self.assertIn("refused 1 write(s): Write", record["error"])
         report = (self.data / "dreams" / record["id"] / "REPORT.md").read_text()
         self.assertIn("**Failed:**", report)
         self.assertIn("Both Write calls were denied.", report)
@@ -213,9 +213,38 @@ Path("changes.json").write_text(json.dumps({"changes": [
         lone_command.write_text(json.dumps({"type": "user", "message": {"role": "user", "content": "/model"}}))
         self.add_session("s-ddd", lone_command)
         self.env["REVERIE_CLAUDE_BIN"] = "false"
-        record = self.dream()
+        record = self.dream("--trigger", "schedule")
         self.assertEqual(record["status"], "no_changes")
         self.assertEqual(record["skipped_sessions"], ["s-ddd"])
+
+    def test_manual_dream_with_nothing_waiting_still_curates(self):
+        self.dream()
+        self.env["REVERIE_CLAUDE_BIN"] = "false"
+        self.assertEqual(self.dream()["status"], "failed", "the dreamer ran")
+
+    def test_user_correction_without_reply_is_reviewed(self):
+        from reverie.transcripts import is_substantive
+        self.assertTrue(is_substantive("USER: always use pnpm, never npm"))
+        self.assertTrue(is_substantive("USER: /omri-code-review 12\n[tool Bash] gh pr view 12"))
+        self.assertFalse(is_substantive("USER: /model"))
+        self.assertFalse(is_substantive(""))
+
+    def test_refused_read_with_a_written_proposal_still_applies(self):
+        script = ROOT / "tests" / "fake_claude_readdenied.py"
+        script.write_text(FAKE_CLAUDE.read_text().replace(
+            'print(json.dumps({"type": "result", "result": "done"}))',
+            'print(json.dumps({"type": "result", "is_error": True, "result": "max turns", '
+            '"permission_denials": [{"tool_name": "Read", "tool_input": {"file_path": "/repo/x.ts"}}]}))'))
+        script.chmod(0o755)
+        self.addCleanup(script.unlink)
+        self.env["REVERIE_CLAUDE_BIN"] = str(script)
+        record = self.dream()
+        self.assertEqual(self.ops(record)[("project.notes", "testing/vitest-mocks.md")]["status"], "applied")
+        self.assertIn("refused Read", (self.data / "dreams" / record["id"] / "REPORT.md").read_text())
+
+    def test_dreamer_workspace_transcripts_map_to_no_project(self):
+        from reverie.sessions import _project_of
+        self.assertIsNone(_project_of(str(self.data.parent / "reverie-dream-abc123")))
 
     def test_memory_written_mid_dream_is_not_proposed_for_deletion(self):
         midwrite = ROOT / "tests" / "fake_claude_midwrite.py"

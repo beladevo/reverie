@@ -66,9 +66,12 @@ def _before(entry: dict, since: Optional[float]) -> bool:
 
 
 def is_substantive(digest: str) -> bool:
-    """A session worth a dreamer's time has the user asking something and the assistant acting on it."""
+    """Worth a dreamer's time: the user typed something besides a slash command (it can carry a correction even
+    with no reply), or the assistant acted on what they asked."""
     lines = digest.splitlines()
-    return any(l.startswith("USER: ") for l in lines) and any(l.startswith(("ASSISTANT: ", "[tool ")) for l in lines)
+    asks = [line[len("USER: "):].lstrip() for line in lines if line.startswith("USER: ")]
+    acted = any(line.startswith(("ASSISTANT: ", "[tool ")) for line in lines)
+    return any(not ask.startswith("/") for ask in asks) or (bool(asks) and acted)
 
 
 def condense(transcript: Path, max_chars: int, since: Optional[float] = None) -> str:
