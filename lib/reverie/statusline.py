@@ -15,10 +15,12 @@ YELLOW, MAGENTA, RESET = "\033[33m", "\033[35m", "\033[0m"
 
 
 def segment(payload: dict) -> str:
+    if not plugin_enabled():
+        return ""
     cwd = (payload.get("workspace") or {}).get("current_dir") or payload.get("cwd") or os.getcwd()
     project = detect_project(Path(cwd))
     parts = []
-    if dream.running(project) is not None:
+    if dream.is_dreaming(project):
         parts.append(f"{MAGENTA}dreaming…{RESET}")
     saved = len(SessionState(payload.get("session_id", "")).data.get("written", []))
     if saved:
@@ -37,7 +39,7 @@ def write_shim() -> Path:
     """Status line commands outlive plugin updates, but the plugin's install path changes with each version,
     so the user's status line calls this shim in the stable data dir and SessionStart keeps it pointed here."""
     path = shim_path()
-    content = f'#!/bin/sh\nexec python3 "{BIN}" statusline\n'
+    content = f'#!/bin/sh\n[ -f "{BIN}" ] || exit 0\nexec python3 "{BIN}" statusline 2>/dev/null\n'
     if not path.exists() or path.read_text() != content:
         atomic_write(path, content.encode())
         path.chmod(0o755)
@@ -49,11 +51,22 @@ def refresh_shim() -> None:
         write_shim()
 
 
-def is_wired() -> bool:
+def _settings() -> dict:
     try:
-        command = json.loads((claude_home() / "settings.json").read_text()).get("statusLine", {}).get("command", "")
-    except (OSError, json.JSONDecodeError, AttributeError):
-        return False
+        settings = json.loads((claude_home() / "settings.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return settings if isinstance(settings, dict) else {}
+
+
+def plugin_enabled() -> bool:
+    """The shim keeps running after `claude plugin disable`, so honour the user-level switch."""
+    enabled = _settings().get("enabledPlugins") or {}
+    return not any(key.startswith("reverie@") and value is False for key, value in enabled.items())
+
+
+def is_wired() -> bool:
+    command = (_settings().get("statusLine") or {}).get("command", "")
     if "reverie" in command:
         return True
     for token in re.findall(r"[^\s'\"]+", command):

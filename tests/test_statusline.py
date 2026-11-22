@@ -1,10 +1,11 @@
-import fcntl
 import json
+import os
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
-from helpers import ReverieTestCase, memory
+from helpers import BIN, ReverieTestCase, memory
 
 from reverie.config import detect_project
 
@@ -19,6 +20,15 @@ class StatuslineTest(ReverieTestCase):
     def notes_dir(self) -> Path:
         context = self.hook("session-start", source="startup")["hookSpecificOutput"]["additionalContext"]
         return Path(re.search(r"## project\.notes .*\nDirectory: `([^`]+)`", context).group(1))
+
+    def settings(self, settings: dict) -> Path:
+        home = Path(self.env["CLAUDE_CONFIG_DIR"])
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "settings.json").write_text(json.dumps(settings))
+        return home
+
+    def read(self, path: Path, session="s-1"):
+        self.hook("post-tool", session=session, tool_name="Read", tool_input={"file_path": str(path)})
 
     def write(self, path: Path, content: str, session="s-1"):
         tool_input = {"file_path": str(path), "content": content}
@@ -45,9 +55,13 @@ class StatuslineTest(ReverieTestCase):
         ops = [{"id": 1, "status": "pending"}, {"id": 2, "status": "applied"}]
         (dream_dir / "result.json").write_text(json.dumps({"id": "d-1", "project": project.id, "ops": ops}))
         self.assertEqual(self.statusline(), "💭 1 to review")
-        with open(self.data / "dreams" / f"{project.id}.lock", "a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            self.assertEqual(self.statusline(), "💭 dreaming… · 1 to review")
+        running = self.data / "dreams" / f"{project.id}.running"
+        running.write_text(f"d-2 {os.getpid()}")
+        self.assertEqual(self.statusline(), "💭 dreaming… · 1 to review")
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        running.write_text(f"d-2 {dead.pid}")
+        self.assertEqual(self.statusline(), "💭 1 to review")
 
     def test_bad_input_prints_nothing(self):
         result = self.cli("statusline", stdin="not json")
@@ -60,6 +74,28 @@ class StatuslineTest(ReverieTestCase):
         self.notes_dir()
         self.assertIn("bin/reverie", shim.read_text())
 
+    def test_shim_is_silent_once_its_target_is_gone(self):
+        shim = Path(self.cli("statusline", "--shim").stdout.strip())
+        shim.write_text(shim.read_text().replace(str(BIN), "/nonexistent/bin/reverie"))
+        result = subprocess.run([str(shim)], input="{}", capture_output=True, text=True)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "", ""))
+
+    def test_deletes_are_not_counted_as_saved(self):
+        notes = self.notes_dir()
+        self.write(notes / "a.md", memory("a"))
+        (notes / "b.md").write_text(memory("b"))
+        self.hook("session-start", source="startup")
+        self.read(notes / "b.md")
+        (notes / "b.md").unlink()
+        self.hook("post-tool", tool_name="Write", tool_input={"file_path": str(notes / "b.md"), "content": ""})
+        self.assertEqual(self.statusline(), "💭 1 saved")
+
+    def test_disabled_plugin_prints_nothing(self):
+        notes = self.notes_dir()
+        self.write(notes / "a.md", memory("a"))
+        self.settings({"enabledPlugins": {"reverie@reverie": False}})
+        self.assertEqual(self.statusline(), "")
+
     def test_hint_once_and_only_while_not_wired(self):
         def hinted():
             context = self.hook("session-start", source="startup")["hookSpecificOutput"]["additionalContext"]
@@ -69,11 +105,9 @@ class StatuslineTest(ReverieTestCase):
         self.assertFalse(hinted())
 
     def test_no_hint_when_status_line_already_shows_reverie(self):
-        home = Path(self.env["CLAUDE_CONFIG_DIR"])
-        home.mkdir(parents=True, exist_ok=True)
-        script = home / "statusline.sh"
+        script = Path(self.env["CLAUDE_CONFIG_DIR"]) / "statusline.sh"
+        self.settings({"statusLine": {"type": "command", "command": f"sh {script}"}})
         script.write_text("#!/bin/sh\nprintf '%s' \"$input\" | ~/.claude/plugins/data/reverie-reverie/statusline.sh\n")
-        (home / "settings.json").write_text(json.dumps({"statusLine": {"type": "command", "command": f"sh {script}"}}))
         context = self.hook("session-start", source="startup")["hookSpecificOutput"]["additionalContext"]
         self.assertNotIn("/reverie:statusline", context)
 
