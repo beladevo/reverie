@@ -60,6 +60,7 @@ preference, or it learns something non-obvious. Commands:
 | `/reverie:history` | version log, view old versions, roll back a file or store |
 | `/reverie:export` | tarball with full history, or one Markdown file |
 | `/reverie:dashboard` | snapshot, plus the command for the live dashboard |
+| `/reverie:statusline` | add `💭 dreaming… · 2 saved · 1 to review` to your status line |
 
 The same operations are available as a CLI: `reverie --help` (on Claude's Bash `PATH` while the plugin is
 enabled, or `bin/reverie` in this repo).

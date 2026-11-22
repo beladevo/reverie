@@ -127,5 +127,10 @@ class SessionState:
         if store_name not in self.data["touched"]:
             self.data["touched"].append(store_name)
 
+    def mark_written(self, store_name: str, rel_path: str) -> None:
+        written = self.data.setdefault("written", [])
+        if f"{store_name}/{rel_path}" not in written:
+            written.append(f"{store_name}/{rel_path}")
+
     def save(self) -> None:
         atomic_write(self.path, json.dumps(self.data).encode())

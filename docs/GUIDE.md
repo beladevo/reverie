@@ -1,6 +1,6 @@
 # Reverie — Product Guide
 
-**Version:** 0.4.0  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
+**Version:** 0.5.0  **Repository:** https://github.com/beladevo/reverie  **License:** MIT
 
 ---
 
@@ -237,6 +237,7 @@ No routine action is needed. Work as usual:
 | `/reverie:history` | View a store's history, read an earlier version, or roll back |
 | `/reverie:export` | Export all memory, with or without history |
 | `/reverie:dashboard` | Snapshot, plus the command that opens the live dashboard |
+| `/reverie:statusline` | Adds Reverie to your status line: dreaming, memories saved this session, changes awaiting review |
 
 ### 5.2 Command line
 

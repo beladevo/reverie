@@ -7,7 +7,7 @@ import traceback
 from pathlib import Path
 from typing import Optional
 
-from . import dream
+from . import dream, statusline
 from .config import claude_home, data_root, detect_project, load_config
 from .inject import build_context
 from .runtime import Attachment, SessionState, attachment_for, resolve_attachments
@@ -56,6 +56,10 @@ def session_start(payload: dict) -> None:
     pending = dream.pending_review(project)
     if pending:
         extra = f"\n_{pending} dreamed memory change(s) await review — mention `/reverie:review` to the user once._\n"
+    statusline.refresh_shim()
+    if statusline.take_hint():
+        extra += ("\n_Reverie can show dreaming, memories saved this session and pending reviews in the status line — "
+                  "mention `/reverie:statusline` to the user once._\n")
     context = build_context(attachments, config, extra)
     if payload.get("source", "startup") == "startup":
         dream.maybe_schedule(project, config, payload.get("cwd") or os.getcwd())
@@ -154,6 +158,8 @@ def post_tool(payload: dict) -> None:
         entry = attachment.store.record(attachment.store.rel(path), actor, parent_seen=state.seen(path))
         state.mark_seen(path, hash_file(path))
         state.touch(attachment.name)
+        if entry:
+            state.mark_written(attachment.name, entry["path"])
     if entry.get("conflict"):
         _emit("PostToolUse", additionalContext=(
             f"Reverie: {path} was changed by another writer while you edited it. Both versions are in history "
