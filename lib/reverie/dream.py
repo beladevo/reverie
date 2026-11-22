@@ -115,12 +115,22 @@ def running(project: Project) -> Optional[dict]:
     if not _lock_held(project):
         return None
     path = _running_path(project)
-    dream_dir = dreams_dir() / (path.read_text().strip() if path.exists() else "-")
+    dream_dir = dreams_dir() / (path.read_text().split()[0] if path.exists() else "-")
     if (dream_dir / "result.json").exists():
         return None
     if (dream_dir / "input.json").exists():
         return json.loads((dream_dir / "input.json").read_text())
     return {"project": project.id}
+
+
+def is_dreaming(project: Project) -> bool:
+    """Lock-free check for frequent pollers: probing the lock could make a dream starting at that moment skip."""
+    try:
+        dream_id, pid = _running_path(project).read_text().split()
+        os.kill(int(pid), 0)
+    except (OSError, ValueError):
+        return False
+    return not (dreams_dir() / dream_id / "result.json").exists()
 
 
 def _lock_path(project: Project) -> Path:
@@ -444,7 +454,7 @@ def run(cwd: Path, mode: Optional[str] = None, trigger: str = "manual") -> dict:
     attachments = [a for a in resolve_attachments(config, project) if a.store]
     with _project_lock(project):
         dream_id = _new_dream_id()
-        atomic_write(_running_path(project), dream_id.encode())
+        atomic_write(_running_path(project), f"{dream_id} {os.getpid()}".encode())
         _mark_attempt(project)
         waiting = unconsumed_sessions(project, config)
         for s in waiting:

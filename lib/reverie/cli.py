@@ -7,7 +7,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-from . import dream, hooks
+from . import dream, hooks, statusline
 from .config import data_root, detect_project, load_config, resolve_store_id
 from .runtime import list_stores, open_store, resolve_attachments
 from .store import Actor, ConflictError, Store
@@ -173,6 +173,18 @@ def cmd_dashboard(args) -> None:
     tui.run(args.cwd)
 
 
+def cmd_statusline(args) -> None:
+    if args.shim:
+        print(statusline.write_shim())
+        return
+    if os.environ.get("REVERIE_DISABLE"):
+        return
+    try:
+        print(statusline.segment(json.loads(sys.stdin.read() or "{}")))
+    except Exception:
+        pass
+
+
 def cmd_hook(args) -> None:
     sys.exit(hooks.run(args.event))
 
@@ -247,6 +259,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("dashboard", help="live terminal dashboard: stores, files and history, dreams, sessions")
     p.add_argument("--once", action="store_true", help="print the overview and exit")
     p.set_defaults(fn=cmd_dashboard)
+
+    p = sub.add_parser("statusline", help="status line segment: dreaming, memories saved this session, pending reviews")
+    p.add_argument("--shim", action="store_true", help="write the stable status line script and print its path")
+    p.set_defaults(fn=cmd_statusline)
 
     p = sub.add_parser("hook", help="internal: Claude Code hook entrypoint")
     p.add_argument("event", choices=sorted(hooks.HANDLERS))
